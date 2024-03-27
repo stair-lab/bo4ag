@@ -13,8 +13,6 @@ from botorch.models import SingleTaskGP
 from botorch.fit import fit_gpytorch_mll
 from botorch.utils import standardize
 from gpytorch.mlls import ExactMarginalLogLikelihood
-# from botorch.models.transforms.outcome import Standardize
-#from botorch.models.transforms import Normalize #this might make things take longer to calculate??? 
 from botorch.utils.transforms import normalize, unnormalize, standardize
 from gpytorch.kernels import MaternKernel, ScaleKernel, RBFKernel, SpectralMixtureKernel
 from models import *
@@ -22,6 +20,7 @@ from models import *
 from botorch.optim import optimize_acqf
 from botorch.acquisition import qUpperConfidenceBound 
 from botorch.acquisition import qExpectedImprovement, qProbabilityOfImprovement, qKnowledgeGradient#, qPredictiveEntropySearch
+from botorch.acquisition.max_value_entropy_search import qMaxValueEntropy
 
 #set device here
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") 
@@ -31,11 +30,7 @@ def getLookup(trait):
     trait = trait.lower()
     #names = {"narea": "Narea", "sla": "SLA", "ps": "PLSR_SLA_Sorghum", "pn": "FS_PLSR_Narea"}
     #trait = names[trait]
-    
-    #base_path = "/dfs/scratch0/ruhana/GenCor"
-    #path = f"{base_path}/Table-Env/table_env/envs/csv_files/{trait}_Full_Analysis.csv"
-    #x_starter, x_end, y_starter, y_end, lookup = csv_mat[0,1], csv_mat[0,-1], csv_mat[1,0], csv_mat[-1,0], csv_mat[1:, 1:]
-    #csv_mat = np.genfromtxt(path, delimiter=',' )
+
     path = f"/lfs/turing2/0/ruhana/gptransfer/Benchmark/data/{trait}_coh2.csv"
     lookup = pd.read_csv(path, header=0)
     
@@ -50,7 +45,7 @@ def getKernel(kernel_name):
     elif kernel_name == "matern32": covar_module = ScaleKernel(MaternKernel(nu=3/2, ard_num_dims=2)) 
     elif kernel_name == "matern12": covar_module = ScaleKernel(MaternKernel(nu=1/2, ard_num_dims=2)) 
     elif kernel_name == "rbf": covar_module =  ScaleKernel(RBFKernel())
-    elif "spectral" in kernel_name: 
+    elif "spectral" in kernel_name: # (e.g. spectral-10, for spectal with 10 groups)
         _, num_mixtures = kernel_name.split("-")
         num_mixtures = int(num_mixtures)
         covar_module = SpectralMixtureKernel(num_mixtures=num_mixtures, ard_num_dims=2)
@@ -62,26 +57,23 @@ def main():
     parser = argparse.ArgumentParser()
     
     parser.add_argument('--env', help='Environment to run search.')
-    parser.add_argument('--kernel', default='rbf',
-                        help='Kernel function for the gaussian process')
+    parser.add_argument('--kernel', default='rbf', help='Kernel function for the gaussian process')
     parser.add_argument('--acq', default='EI', help='Acquisition function')
     parser.add_argument('--n', type=int, default=300, help='Number of iterations')
     
     args = parser.parse_args()
     
-    if args.acq == "random":
-        runRandom(args)
-    else:
-        runBO(args)
+    if args.acq == "random": runRandom(args)
+    else: runBO(args)
     return 
 
 def runBO(args):
-    num_restarts = 128  
+    num_restarts = 20 # 128  
     raw_samples = 128
     q = 1
     n = args.n #replace this
     trait = args.env
-    seeds = 5 #consider replacing this
+    seeds = 3 #consider replacing this
     acq_name = args.acq
     kernel_name = args.kernel
     kernel = getKernel(kernel_name)
@@ -96,9 +88,6 @@ def runBO(args):
 
     for seed in range(0,seeds): #seed one is already run and stuff
         tic = time.perf_counter() #start time
-        
-        #define some pending points (there are points that cannot be retrieved)
-        X_pending = torch.tensor([[i, i] for i in range(2151)])
         
         ##collect random points as training points
         torch.manual_seed(seed) #setting seed
@@ -138,6 +127,7 @@ def runBO(args):
                 )
 
                 mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
+                # load old hyperparameters 
                 fit_gpytorch_mll(mll)
 
                 #select acquisition function
@@ -151,9 +141,6 @@ def runBO(args):
                     acq = qKnowledgeGradient(gp)  
                 else:
                     print(f"{acq_name} is not a valid acquisition function")
-                
-                #set X_pending values
-                #acq.set_X_pending(X_pending)
             
             #get new point & query new point
             normalized_new_X, acq_value = optimize_acqf(
@@ -166,15 +153,6 @@ def runBO(args):
             new_Y = torch.tensor([lookup[int(new_X[i,0]), int(new_X[i,1])] for i in range(len(new_X))], 
                                  dtype=torch.float64, 
                                  device=device).reshape(-1, 1)
-
-            #add new candidate
-#             test_X = torch.tensor([[350,350]], dtype=torch.float64, device=device)
-#             test_Y = torch.tensor([lookup[int(test_X[i,0]), int(test_X[i,1])] 
-#                                    for i in range(len(test_X))], 
-#                                  dtype=torch.float64, 
-#                                  device=device).reshape(-1, 1)
-#             train_X = torch.cat([train_X, test_X])
-#             train_Y = torch.cat([train_Y, test_Y])
 
             train_X = torch.cat([train_X, new_X])
             train_Y = torch.cat([train_Y, new_Y])
