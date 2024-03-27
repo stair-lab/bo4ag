@@ -23,17 +23,24 @@ from botorch.acquisition import qUpperConfidenceBound
 from botorch.acquisition import qExpectedImprovement, qProbabilityOfImprovement, qKnowledgeGradient#, qPredictiveEntropySearch
 
 #set device here
-device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu") 
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") 
+print(device)
 
 def getLookup(trait):
-    names = {"narea": "Narea", "sla": "SLA", "ps": "PLSR_SLA_Sorghum", "pn": "FS_PLSR_Narea"}
-    trait = trait.lower()
-    trait = names[trait]
+#     names = {"narea": "Narea", "sla": "SLA", "ps": "PLSR_SLA_Sorghum", "pn": "FS_PLSR_Narea"}
+#     trait = trait.lower()
+#     trait = names[trait]
     
-    base_path = "/dfs/scratch0/ruhana/GenCor"
-    path = f"{base_path}/Table-Env/table_env/envs/csv_files/{trait}_Full_Analysis.csv"
-    csv_mat = np.genfromtxt(path, delimiter=',' )
-    x_starter, x_end, y_starter, y_end, lookup = csv_mat[0,1], csv_mat[0,-1], csv_mat[1,0], csv_mat[-1,0], csv_mat[1:, 1:]
+#     base_path = "/dfs/scratch0/ruhana/GenCor"
+#     path = f"{base_path}/Table-Env/table_env/envs/csv_files/{trait}_Full_Analysis.csv"
+#     csv_mat = np.genfromtxt(path, delimiter=',' )
+#     x_starter, x_end, y_starter, y_end, lookup = csv_mat[0,1], csv_mat[0,-1], csv_mat[1,0], csv_mat[-1,0], csv_mat[1:, 1:]
+    path = f"/lfs/turing2/0/ruhana/gptransfer/Benchmark/data/{trait}_coh2.csv"
+    lookup = pd.read_csv(path, header=0)
+    
+    ##fix formatting
+    lookup_tensor = torch.tensor(lookup.values, dtype=torch.float64)
+    no_nan_lookup = torch.nan_to_num(lookup_tensor)
     return lookup
 
 def getKernel(kernel_name):
@@ -70,7 +77,7 @@ def main():
 def runRandom(args):
     n = args.n #replace this
     trait = args.env
-    seeds = 5 #consider replacing this
+    seeds = 3 #consider replacing this
     acq_name = "random"
     
     #get lookup environment
