@@ -20,7 +20,8 @@ from gpytorch.kernels import MaternKernel, ScaleKernel, RBFKernel, SpectralMixtu
 
 from botorch.optim import optimize_acqf
 from botorch.acquisition import qUpperConfidenceBound 
-from botorch.acquisition import qExpectedImprovement, qProbabilityOfImprovement, qKnowledgeGradient#, qPredictiveEntropySearch
+from botorch.acquisition import qExpectedImprovement, qProbabilityOfImprovement, qKnowledgeGradient#, 
+from botorch.acquisition.max_value_entropy_search import qMaxValueEntropy
 
 #set device here
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") 
@@ -77,7 +78,7 @@ def main():
 def runRandom(args):
     n = args.n #replace this
     trait = args.env
-    seeds = 3 #consider replacing this
+    seeds = 5 #consider replacing this
     acq_name = "random"
     
     #get lookup environment
@@ -169,6 +170,9 @@ def runBO(args):
         ##main bayes_opt training loop
         _result = []
         for i in tqdm(range(n)):
+#             if "spectral" in acq_name :
+#                 kernel = kernel.initialize_from_data(train_X, train_Y)
+                
             gp = SingleTaskGP(
                 train_X, train_Y, 
                 covar_module = kernel,
@@ -180,8 +184,10 @@ def runBO(args):
             fit_gpytorch_mll(mll)
             
             #select acquisition function
-            if acq_name == "UCB":
-                acq = qUpperConfidenceBound(gp, beta=0.1)
+            if "UCB" in acq_name:
+                _, beta = acq_name.split("-")
+                beta = float(beta)
+                acq = qUpperConfidenceBound(gp, beta=beta)
             elif acq_name == "EI": #working
                 acq = qExpectedImprovement(gp, best_f=max(train_Y))
             elif acq_name == "PI": #working
@@ -189,9 +195,17 @@ def runBO(args):
             elif acq_name == "KG": #working
                 num_restarts = 20
                 acq = qKnowledgeGradient(gp)
+#             elif acq_name == "MES":
+#                 x1_values = np.linspace(0, 2150, 2150)
+#                 x2_values = np.linspace(0, 2150, 2150)
+#                 x1, x2 = np.meshgrid(x1_values, x2_values)
+#                 candidates = np.vstack([x1.ravel(), x2.ravel()]).T
+#                 candidates = torch.from_numpy(candidates).to(device=device)
+                
+#                 acq = qMaxValueEntropy(gp, candidates)
             else:
                 print(f"{acq_name} is not a valid acquisition function")
-            
+   
             new_X, acq_value = optimize_acqf(
                 acq, 
                 q=1, 
@@ -237,3 +251,6 @@ main()
 
 #add other acquisition function options
 #make sure that data loading works correctly
+
+#added multiple ability to add multiple UCB beta values
+#
