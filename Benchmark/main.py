@@ -41,7 +41,7 @@ def getLookup(trait):
     ##fix formatting
     lookup_tensor = torch.tensor(lookup.values, dtype=torch.float64)
     no_nan_lookup = torch.nan_to_num(lookup_tensor)
-    return lookup
+    return no_nan_lookup
 
 def getKernel(kernel_name):
     covar_module = None
@@ -86,13 +86,14 @@ def runRandom(args):
 
     #check the lookup table
     #not sure about this lookup table...
-    assert np.isnan(np.sum(lookup)) == False 
-    assert np.isinf(np.sum(lookup)) == False
+    assert torch.isnan(torch.sum(lookup)) == False 
+    assert torch.isinf(torch.sum(lookup)) == False
     
     ##main bayes_opt training loop
     train_X = torch.empty((0, 2), dtype=torch.float64, device=device)
     train_Y = torch.empty((0, 1), dtype=torch.float64, device=device)
 
+    print(f"Running {trait}, random search...")
     for seed in range(0,seeds): #seed one is already run and stuff
         torch.manual_seed(seed)
         tic = time.perf_counter() #start time
@@ -141,6 +142,7 @@ def runBO(args):
     n = args.n #replace this
     trait = args.env
     seeds = 5 #consider replacing this
+    acq_name = args.acq
     kernel_name = args.kernel
     kernel = getKernel(kernel_name)
     
@@ -149,9 +151,10 @@ def runBO(args):
     bounds = torch.stack([torch.zeros(2).double(), torch.ones(2).double() * (lookup.shape[0]-1)]).to(device, torch.float64)
 
     #check the lookup table
-    assert np.isnan(np.sum(lookup)) == False 
-    assert np.isinf(np.sum(lookup)) == False
+    assert torch.isnan(torch.sum(lookup)) == False 
+    assert torch.isinf(torch.sum(lookup)) == False
 
+    print(f"Running {trait}, {args.acq}-{kernel_name}...")
     for seed in range(0,seeds): #seed one is already run and stuff
         tic = time.perf_counter() #start time
 
@@ -177,7 +180,6 @@ def runBO(args):
             fit_gpytorch_mll(mll)
             
             #select acquisition function
-            acq_name = args.acq
             if acq_name == "UCB":
                 acq = qUpperConfidenceBound(gp, beta=0.1)
             elif acq_name == "EI": #working
@@ -185,7 +187,8 @@ def runBO(args):
             elif acq_name == "PI": #working
                 acq = qProbabilityOfImprovement(gp, best_f=max(train_Y))
             elif acq_name == "KG": #working
-                acq = qKnowledgeGradient(gp)  
+                num_restarts = 20
+                acq = qKnowledgeGradient(gp)
             else:
                 print(f"{acq_name} is not a valid acquisition function")
             
