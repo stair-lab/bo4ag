@@ -19,24 +19,33 @@ from models import *
 
 from botorch.optim import optimize_acqf
 from botorch.acquisition import qUpperConfidenceBound 
-from botorch.acquisition import qExpectedImprovement, qProbabilityOfImprovement, qKnowledgeGradient#, qPredictiveEntropySearch
+from botorch.acquisition import qExpectedImprovement, qProbabilityOfImprovement, qKnowledgeGradient#, 
 from botorch.acquisition.max_value_entropy_search import qMaxValueEntropy
 
 #set device here
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") 
+device = torch.device("cuda:9" if torch.cuda.is_available() else "cpu") 
 print(device)
 
 def getLookup(trait):
-    trait = trait.lower()
-    #names = {"narea": "Narea", "sla": "SLA", "ps": "PLSR_SLA_Sorghum", "pn": "FS_PLSR_Narea"}
-    #trait = names[trait]
-
+#     names = {"narea": "Narea", "sla": "SLA", "ps": "PLSR_SLA_Sorghum", "pn": "FS_PLSR_Narea"}
+#     trait = trait.lower()
+#     trait = names[trait]
+    
+#     base_path = "/dfs/scratch0/ruhana/GenCor"
+#     path = f"{base_path}/Table-Env/table_env/envs/csv_files/{trait}_Full_Analysis.csv"
+#     csv_mat = np.genfromtxt(path, delimiter=',' )
+#     x_starter, x_end, y_starter, y_end, lookup = csv_mat[0,1], csv_mat[0,-1], csv_mat[1,0], csv_mat[-1,0], csv_mat[1:, 1:]
     path = f"/lfs/turing2/0/ruhana/gptransfer/Benchmark/data/{trait}_coh2.csv"
     lookup = pd.read_csv(path, header=0)
     
     ##fix formatting
     lookup_tensor = torch.tensor(lookup.values, dtype=torch.float64)
     no_nan_lookup = torch.nan_to_num(lookup_tensor)
+#     count_above_1 = (no_nan_lookup > 1).sum().item()
+#     values_above_1 = lookup_tensor[lookup_tensor > 1]
+#     print(values_above_1)
+#     exit()
+    no_nan_lookup[no_nan_lookup > 1] = 0
     return no_nan_lookup
 
 def getKernel(kernel_name):
@@ -83,9 +92,20 @@ def runBO(args):
     bounds = torch.tensor([[0,0],[2150,2150]]).to(device, torch.float64)
 
     #check the lookup table
+<<<<<<< HEAD
     assert torch.isnan(torch.sum(lookup)) == False 
     assert torch.isinf(torch.sum(lookup)) == False
+=======
+    #not sure about this lookup table...
+    assert torch.isnan(torch.sum(lookup)) == False 
+    assert torch.isinf(torch.sum(lookup)) == False
+    
+    ##main bayes_opt training loop
+    train_X = torch.empty((0, 2), dtype=torch.float64, device=device)
+    train_Y = torch.empty((0, 1), dtype=torch.float64, device=device)
+>>>>>>> 9991eba
 
+    print(f"Running {trait}, random search...")
     for seed in range(0,seeds): #seed one is already run and stuff
         tic = time.perf_counter() #start time
         
@@ -183,11 +203,34 @@ def runBO(args):
         toc = time.perf_counter() #end time
         print("BoTorch Took ", (toc-tic) ,"seconds")
 
+<<<<<<< HEAD
 def runRandom(args):
     n = args.n #replace this
     trait = args.env
     seeds = 5 #consider replacing this
     acq_name = "random"
+=======
+def getCoordTensor(size=2150):
+    x = torch.arange(size)
+    y = torch.arange(size)
+
+    # Create a grid of x and y coordinates
+    X, Y = torch.meshgrid(x, y)
+
+    # Combine x and y coordinates into a single tensor
+    coordinates_tensor = torch.stack((X, Y), dim=-1).reshape(-1,2)
+    return coordinates_tensor.to(device, torch.float64)
+
+def runBO(args):
+    num_restarts = 128  
+    raw_samples = 128
+    n = args.n #replace this
+    trait = args.env
+    seeds = 5 #consider replacing this
+    acq_name = args.acq
+    kernel_name = args.kernel
+    kernel = getKernel(kernel_name)
+>>>>>>> 9991eba
     
     #get lookup environment
     lookup = getLookup(args.env)
@@ -196,22 +239,87 @@ def runRandom(args):
     #check the lookup table
     assert torch.isnan(torch.sum(lookup)) == False 
     assert torch.isinf(torch.sum(lookup)) == False
+<<<<<<< HEAD
     
     ##main bayes_opt training loop
     train_X = torch.empty((0, 2), dtype=torch.float64, device=device)
     train_Y = torch.empty((0, 1), dtype=torch.float64, device=device)
+=======
+>>>>>>> 9991eba
 
+    print(f"Running {trait}, {args.acq}-{kernel_name}...")
     for seed in range(0,seeds): #seed one is already run and stuff
         torch.manual_seed(seed)
         tic = time.perf_counter() #start time
         
         _result = []
         for i in tqdm(range(n)):
+<<<<<<< HEAD
             new_X = torch.rand((1, 2), dtype=torch.float64, device=device,)
             new_X = new_X * (ub - lb) + lb #adjust to match bounds
             new_Y = torch.tensor([lookup[int(new_X[0][0]), int(new_X[0][1])]], 
                                  dtype=torch.float64, 
                                  device=device).reshape(-1, 1)
+=======
+#             if "spectral" in acq_name :
+#                 kernel = kernel.initialize_from_data(train_X, train_Y)
+                
+            gp = SingleTaskGP(
+                train_X, train_Y, 
+                covar_module = kernel,
+                outcome_transform=Standardize(1), 
+                input_transform=Normalize(train_X.shape[-1])
+            )
+
+            mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
+            fit_gpytorch_mll(mll)
+            
+            #select acquisition function
+            if "UCB" in acq_name:
+                _, beta = acq_name.split("-")
+                beta = float(beta)
+                acq = qUpperConfidenceBound(gp, beta=beta)
+            elif acq_name == "EI": #working
+                acq = qExpectedImprovement(gp, best_f=max(train_Y))
+            elif acq_name == "PI": #working
+                acq = qProbabilityOfImprovement(gp, best_f=max(train_Y))
+            elif acq_name == "KG": #working
+                num_restarts = 10
+                acq = qKnowledgeGradient(gp)
+#             elif acq_name == "MES":
+#                 x1_values = np.linspace(0, 2150, 2150)
+#                 x2_values = np.linspace(0, 2150, 2150)
+#                 x1, x2 = np.meshgrid(x1_values, x2_values)
+#                 candidates = np.vstack([x1.ravel(), x2.ravel()]).T
+#                 candidates = torch.from_numpy(candidates).to(device=device)
+#                 acq = qMaxValueEntropy(gp, candidates)
+            else:
+                print(f"{acq_name} is not a valid acquisition function")
+   
+            test_X = getCoordTensor(2150)
+            test_Y = []
+            for i in tqdm(range(3698//4)):
+                test_Y_ = acq(test_X[i*2500*2:(i+1)*2500*2])
+                test_Y.append(test_Y_.detach())
+                
+            breakpoint()
+            ind = torch.argmax(test_Y)
+            new_X = test_X[ind].reshape(-1,2)
+            
+#             exit()
+    
+#             new_X, acq_value = optimize_acqf(
+#                 acq, 
+#                 q=1, 
+#                 bounds=bounds, 
+#                 num_restarts=num_restarts, 
+#                 raw_samples=raw_samples)
+
+            new_Y = torch.tensor([lookup[int(new_X[0][0]), int(new_X[0][1])]], 
+                                 dtype=torch.float64, 
+                                 device=device).reshape(-1, 1)
+            
+>>>>>>> 9991eba
             #add new candidate
             train_X = torch.cat([train_X, new_X])
             train_Y = torch.cat([train_Y, new_Y])
@@ -247,3 +355,6 @@ main()
 
 #add other acquisition function options
 #make sure that data loading works correctly
+
+#added multiple ability to add multiple UCB beta values
+#
