@@ -6,5 +6,6 @@
 ## Running Bayesian Optimization (BO) Benchmarks
 1. `cd Benchmarks`
 2. Run `python main.py --env <trait> --n <number of iterations> --kernel <kernel> --acq <acquisition function>`
-  Example: `python main.py --env narea --n 30 --kernel matern12 --acq EI`
+
+**Example:** `python main.py --env narea --n 30 --kernel matern12 --acq EI`
    
