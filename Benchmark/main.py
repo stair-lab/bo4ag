@@ -23,12 +23,12 @@ from botorch.acquisition import (
 # from botorch.acquisition.max_value_entropy_search import qMaxValueEntropy
 
 # set device here
-device = torch.device("cuda:9" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device Used: {device}")
 
 
 def getLookup(trait):
-    path = f"/lfs/turing2/0/ruhana/gptransfer/Benchmark/data/{trait}_coh2.csv"
+    path = f"./data/{trait}_coh2.csv"
     lookup = pd.read_csv(path, header=0)
 
     # fix formatting
@@ -66,8 +66,13 @@ def main():
     )
     parser.add_argument("--acq", default="EI", help="Acquisition function")
     parser.add_argument("--n", type=int, default=300, help="Number of iterations")
-
+    parser.add_argument("--gpu", type=int, default=0, help="Gpu id to run the job")
     args = parser.parse_args()
+    
+    #set device globally
+    global device
+    device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
+    print(f"Device Used: {device}")
 
     if args.acq == "random":
         runRandom(args)
