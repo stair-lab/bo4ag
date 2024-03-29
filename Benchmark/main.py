@@ -220,18 +220,6 @@ def runBO(args):
 #                 acq = qMaxValueEntropy(gp, candidates)
             else:
                 print(f"{acq_name} is not a valid acquisition function")
-   
-#             test_X = getCoordTensor(2150)
-#             test_Y = []
-#             for i in tqdm(range(3698//4)):
-#                 test_Y_ = acq(test_X[i*2500*2:(i+1)*2500*2])
-#                 test_Y.append(test_Y_.detach())
-                
-#             breakpoint()
-#             ind = torch.argmax(test_Y)
-#             new_X = test_X[ind].reshape(-1,2)
-            
-#             exit()
     
             new_X, acq_value = optimize_acqf(
                 acq, 
