@@ -96,13 +96,18 @@ def runRandom(args):
     assert torch.isinf(torch.sum(lookup)) == False
     
     ##main bayes_opt training loop
-    train_X = torch.empty((0, 2), dtype=torch.float64, device=device)
-    train_Y = torch.empty((0, 1), dtype=torch.float64, device=device)
+    #train_X = torch.empty((0, 2), dtype=torch.float64, device=device)
+    #train_Y = torch.empty((0, 1), dtype=torch.float64, device=device)
 
     print(f"Running {trait}, random search...")
     for seed in range(0,seeds): #seed one is already run and stuff
         torch.manual_seed(seed)
         tic = time.perf_counter() #start time
+        
+        train_X = torch.rand(10, 2, dtype=torch.float64, device=device) * (lookup.shape[0]-1)
+        train_Y = torch.tensor([lookup[int(train_X[i][0]), int(train_X[i][1])] for i in range(0, len(train_X))], 
+                               dtype=torch.float64, 
+                               device=device).reshape(-1, 1)
         
         _result = []
         for i in tqdm(range(n)):
@@ -118,6 +123,7 @@ def runRandom(args):
             #end timer and add
             toc = time.perf_counter() #end time
             _result.append([new_Y[0][0].item(), toc - tic, new_X[0]])
+            
 
         #save all your queries
         torch.save(train_X, f"./output/{trait}/botorch{acq_name}_X_{seed}.npy")
