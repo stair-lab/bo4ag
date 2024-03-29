@@ -24,7 +24,7 @@ from botorch.acquisition import qExpectedImprovement, qProbabilityOfImprovement,
 from botorch.acquisition.max_value_entropy_search import qMaxValueEntropy
 
 #set device here
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") 
+device = torch.device("cuda:9" if torch.cuda.is_available() else "cpu") 
 print(device)
 
 def getLookup(trait):
@@ -42,6 +42,11 @@ def getLookup(trait):
     ##fix formatting
     lookup_tensor = torch.tensor(lookup.values, dtype=torch.float64)
     no_nan_lookup = torch.nan_to_num(lookup_tensor)
+#     count_above_1 = (no_nan_lookup > 1).sum().item()
+#     values_above_1 = lookup_tensor[lookup_tensor > 1]
+#     print(values_above_1)
+#     exit()
+    no_nan_lookup[no_nan_lookup > 1] = 0
     return no_nan_lookup
 
 def getKernel(kernel_name):
@@ -137,6 +142,17 @@ def runRandom(args):
     
     return 
 
+def getCoordTensor(size=2150):
+    x = torch.arange(size)
+    y = torch.arange(size)
+
+    # Create a grid of x and y coordinates
+    X, Y = torch.meshgrid(x, y)
+
+    # Combine x and y coordinates into a single tensor
+    coordinates_tensor = torch.stack((X, Y), dim=-1).reshape(-1,2)
+    return coordinates_tensor.to(device, torch.float64)
+
 def runBO(args):
     num_restarts = 128  
     raw_samples = 128
@@ -193,7 +209,7 @@ def runBO(args):
             elif acq_name == "PI": #working
                 acq = qProbabilityOfImprovement(gp, best_f=max(train_Y))
             elif acq_name == "KG": #working
-                num_restarts = 20
+                num_restarts = 10
                 acq = qKnowledgeGradient(gp)
 #             elif acq_name == "MES":
 #                 x1_values = np.linspace(0, 2150, 2150)
@@ -201,21 +217,33 @@ def runBO(args):
 #                 x1, x2 = np.meshgrid(x1_values, x2_values)
 #                 candidates = np.vstack([x1.ravel(), x2.ravel()]).T
 #                 candidates = torch.from_numpy(candidates).to(device=device)
-                
 #                 acq = qMaxValueEntropy(gp, candidates)
             else:
                 print(f"{acq_name} is not a valid acquisition function")
    
-            new_X, acq_value = optimize_acqf(
-                acq, 
-                q=1, 
-                bounds=bounds, 
-                num_restarts=num_restarts, 
-                raw_samples=raw_samples)
+            test_X = getCoordTensor(2150)
+            test_Y = []
+            for i in tqdm(range(3698//4)):
+                test_Y_ = acq(test_X[i*2500*2:(i+1)*2500*2])
+                test_Y.append(test_Y_.detach())
+                
+            breakpoint()
+            ind = torch.argmax(test_Y)
+            new_X = test_X[ind].reshape(-1,2)
+            
+#             exit()
+    
+#             new_X, acq_value = optimize_acqf(
+#                 acq, 
+#                 q=1, 
+#                 bounds=bounds, 
+#                 num_restarts=num_restarts, 
+#                 raw_samples=raw_samples)
+
             new_Y = torch.tensor([lookup[int(new_X[0][0]), int(new_X[0][1])]], 
                                  dtype=torch.float64, 
                                  device=device).reshape(-1, 1)
-
+            
             #add new candidate
             train_X = torch.cat([train_X, new_X])
             train_Y = torch.cat([train_Y, new_Y])
