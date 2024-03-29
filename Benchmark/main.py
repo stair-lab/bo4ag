@@ -1,58 +1,39 @@
-import numpy as np
 import torch
 import pandas as pd
-import matplotlib.pyplot as plt
-import pickle
 import time
-import sys
 import argparse
 from tqdm import tqdm
 
-import torch
 from botorch.models import SingleTaskGP
 from botorch.fit import fit_gpytorch_mll
-from botorch.utils import standardize
 from gpytorch.mlls import ExactMarginalLogLikelihood
+
+# from botorch.utils import standardize
 from botorch.models.transforms.outcome import Standardize
-from botorch.models.transforms import (
-    Normalize,
-)  # this might make things take longer to calculate???
+from botorch.models.transforms import Normalize
 from gpytorch.kernels import MaternKernel, ScaleKernel, RBFKernel, SpectralMixtureKernel
-
-
 from botorch.optim import optimize_acqf
-from botorch.acquisition import qUpperConfidenceBound
 from botorch.acquisition import (
+    qUpperConfidenceBound,
     qExpectedImprovement,
     qProbabilityOfImprovement,
     qKnowledgeGradient,
-)  # ,
-from botorch.acquisition.max_value_entropy_search import qMaxValueEntropy
+)
+
+# from botorch.acquisition.max_value_entropy_search import qMaxValueEntropy
 
 # set device here
 device = torch.device("cuda:9" if torch.cuda.is_available() else "cpu")
-print(device)
+print(f"Device Used: {device}")
 
 
 def getLookup(trait):
-    #     names = {"narea": "Narea", "sla": "SLA", "ps": "PLSR_SLA_Sorghum", "pn": "FS_PLSR_Narea"}
-    #     trait = trait.lower()
-    #     trait = names[trait]
-
-    #     base_path = "/dfs/scratch0/ruhana/GenCor"
-    #     path = f"{base_path}/Table-Env/table_env/envs/csv_files/{trait}_Full_Analysis.csv"
-    #     csv_mat = np.genfromtxt(path, delimiter=',' )
-    #     x_starter, x_end, y_starter, y_end, lookup = csv_mat[0,1], csv_mat[0,-1], csv_mat[1,0], csv_mat[-1,0], csv_mat[1:, 1:]
     path = f"/lfs/turing2/0/ruhana/gptransfer/Benchmark/data/{trait}_coh2.csv"
     lookup = pd.read_csv(path, header=0)
 
-    ##fix formatting
+    # fix formatting
     lookup_tensor = torch.tensor(lookup.values, dtype=torch.float64)
     no_nan_lookup = torch.nan_to_num(lookup_tensor)
-    #     count_above_1 = (no_nan_lookup > 1).sum().item()
-    #     values_above_1 = lookup_tensor[lookup_tensor > 1]
-    #     print(values_above_1)
-    #     exit()
     no_nan_lookup[no_nan_lookup > 1] = 0
     return no_nan_lookup
 
@@ -106,8 +87,8 @@ def runRandom(args):
     ub, lb = 2150, 0
 
     # check the lookup table
-    assert torch.isnan(torch.sum(lookup)) == False
-    assert torch.isinf(torch.sum(lookup)) == False
+    assert not torch.isnan(torch.sum(lookup))
+    assert not torch.isinf(torch.sum(lookup))
 
     print(f"Running {trait}, random search...")
     for seed in range(0, seeds):  # seed one is already run and stuff
@@ -178,13 +159,8 @@ def runRandom(args):
 
 
 def getCoordTensor(size=2150):
-    x = torch.arange(size)
-    y = torch.arange(size)
-
-    # Create a grid of x and y coordinates
+    x, y = torch.arange(size), torch.arange(size)
     X, Y = torch.meshgrid(x, y)
-
-    # Combine x and y coordinates into a single tensor
     coordinates_tensor = torch.stack((X, Y), dim=-1).reshape(-1, 2)
     return coordinates_tensor.to(device, torch.float64)
 
@@ -206,14 +182,14 @@ def runBO(args):
     ).to(device, torch.float64)
 
     # check the lookup table
-    assert torch.isnan(torch.sum(lookup)) == False
-    assert torch.isinf(torch.sum(lookup)) == False
+    assert not torch.isnan(torch.sum(lookup))
+    assert not torch.isinf(torch.sum(lookup))
 
     print(f"Running {trait}, {args.acq}-{kernel_name}...")
     for seed in range(0, seeds):  # seed one is already run and stuff
         tic = time.perf_counter()  # start time
 
-        ##collect random points as training points
+        # collect random points as training points
         torch.manual_seed(seed)  # setting seed
         train_X = torch.rand(10, 2, dtype=torch.float64, device=device) * (
             lookup.shape[0] - 1
@@ -228,7 +204,7 @@ def runBO(args):
         )
         train_Y = train_Y.reshape(-1, 1)
 
-        ##main bayes_opt training loop
+        # main bayes_opt training loop
         _result = []
         for i in tqdm(range(n)):
             #             if "spectral" in acq_name :
