@@ -194,7 +194,7 @@ def runBO(args):
         return Y.to(device, torch.float64)
 
     bounds = torch.stack(
-        [torch.zeros(2).double(), torch.ones(2).double() * (table.shape[0] - 1)]
+        [torch.zeros(2).double(), torch.ones(2).double() * 2150]
     ).to(device, torch.float64)
     
     # check the lookup table
