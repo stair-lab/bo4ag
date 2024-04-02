@@ -19,12 +19,10 @@ from botorch.acquisition import (
     qProbabilityOfImprovement,
     qKnowledgeGradient,
 )
-
 # from botorch.acquisition.max_value_entropy_search import qMaxValueEntropy
 
 # set device here
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Device Used: {device}")
 
 
 def getLookup(trait):
@@ -74,10 +72,11 @@ def main():
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     print(f"Device Used: {device}")
 
-    if args.acq == "random":
-        runRandom(args)
-    else:
-        runBO(args)
+#     if args.acq == "random":
+#         runRandom(args)
+#     else:
+#         runBO(args)
+    runBO(args)
     return
 
 def runRandom(args):
@@ -86,7 +85,6 @@ def runRandom(args):
     seeds = 5  # consider replacing this
     acq_name = "random"
     lookup = getLookup(args.env)
-    ub, lb = 2150, 0
 
     # check the lookup table
     assert not torch.isnan(torch.sum(lookup))
@@ -116,7 +114,7 @@ def runRandom(args):
                 dtype=torch.float64,
                 device=device,
             )
-            new_X = new_X * (ub - lb) + lb  # adjust to match bounds
+            new_X = new_X * 2150  # adjust to match bounds
             new_Y = torch.tensor(
                 [lookup[int(new_X[0][0]), int(new_X[0][1])]],
                 dtype=torch.float64,
@@ -215,6 +213,7 @@ def runBO(args):
         # main bayes_opt training loop
         _result = []
         _curve = {"n": [], "train_loss": [] , "val_loss": []}
+        run_name = f"{acq_name}_{kernel_name}"
         for i in tqdm(range(n)):
             gp = SingleTaskGP(
                 train_X,
@@ -226,40 +225,41 @@ def runBO(args):
 
             mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
             fit_gpytorch_mll(mll)
-
-            # select acquisition function
-            if "UCB" in acq_name:
-                _, beta = acq_name.split("-")
-                beta = float(beta)
-                acq = qUpperConfidenceBound(gp, beta=beta)
-            elif acq_name == "EI":  # working
-                acq = qExpectedImprovement(gp, best_f=max(train_Y))
-            elif acq_name == "PI":  # working
-                acq = qProbabilityOfImprovement(gp, best_f=max(train_Y))
-            elif acq_name == "KG":  # working
-                num_restarts = 10
-                acq = qKnowledgeGradient(gp)
-            elif acq_name == "MES":
-                continue
-            # TODO
-            #                 x1_values = np.linspace(0, 2150, 2150)
-            #                 x2_values = np.linspace(0, 2150, 2150)
-            #                 x1, x2 = np.meshgrid(x1_values, x2_values)
-            #                 candidates = np.vstack([x1.ravel(), x2.ravel()]).T
-            #                 candidates = torch.from_numpy(candidates).to(device=device)
-            #                 acq = qMaxValueEntropy(gp, candidates)
-            elif acq_name == "Random":
-                continue
-            else:
-                print(f"{acq_name} is not a valid acquisition function")
-
-            new_X, acq_value = optimize_acqf(
-                acq,
-                q=1,
-                bounds=bounds,
-                num_restarts=num_restarts,
-                raw_samples=raw_samples,
-            )
+            
+            if acq_name == "random":
+                run_name = f"{acq_name}"
+                new_X = torch.rand((1, 2), dtype=torch.float64, device=device,)
+                new_X = new_X * 2150  # adjust to match bounds
+            else: 
+                #all acquition functions which use `optimize_acqf` as the optimizer
+                if "UCB" in acq_name:
+                    _, beta = acq_name.split("-")
+                    beta = float(beta)
+                    acq = qUpperConfidenceBound(gp, beta=beta)
+                elif acq_name == "EI":  # working
+                    acq = qExpectedImprovement(gp, best_f=max(train_Y))
+                elif acq_name == "PI":  # working
+                    acq = qProbabilityOfImprovement(gp, best_f=max(train_Y))
+                elif acq_name == "KG":  # working
+                    num_restarts = 10
+                    acq = qKnowledgeGradient(gp)
+                elif acq_name == "MES":
+                    continue
+                # TODO
+                #                 x1_values = np.linspace(0, 2150, 2150)
+                #                 x2_values = np.linspace(0, 2150, 2150)
+                #                 x1, x2 = np.meshgrid(x1_values, x2_values)
+                #                 candidates = np.vstack([x1.ravel(), x2.ravel()]).T
+                #                 candidates = torch.from_numpy(candidates).to(device=device)
+                else:
+                    print(f"{acq_name} is not a valid acquisition function")
+                new_X, acq_value = optimize_acqf(
+                    acq,
+                    q=1,
+                    bounds=bounds,
+                    num_restarts=num_restarts,
+                    raw_samples=raw_samples,
+                )
             new_Y = lookup(new_X)
             
             #calculate validation loss here 
@@ -278,12 +278,12 @@ def runBO(args):
             _result.append([new_Y[0][0].item(), toc - tic, new_X[0]])
 
         # save all your queries
-        torch.save(train_X, f"./output/{trait}/botorch{acq_name}_{kernel_name}_X_{seed}.npy")
-        torch.save(train_Y, f"./output/{trait}/botorch{acq_name}_{kernel_name}_Y_{seed}.npy")
+        torch.save(train_X, f"./output/{trait}/botorch{run_name}_X_{seed}.npy")
+        torch.save(train_Y, f"./output/{trait}/botorch{run_name}_Y_{seed}.npy")
         
         #save learning curve
         curve_df = pd.DataFrame(_curve)
-        curve_df.to_csv(f"./output/{trait}/botorch{acq_name}_{kernel_name}_curve_{seed}.npy",
+        curve_df.to_csv(f"./output/{trait}/botorch{run_name}_curve_{seed}.npy",
             encoding="utf8",)
         
         # organize the list to have running best
@@ -302,7 +302,7 @@ def runBO(args):
             botorch_result, columns=["Best", "Time", "Candidate"]
         )
         botorch_result.to_csv(
-            f"./output/{trait}/botorch{acq_name}_{kernel_name}_result_{seed}.npy",
+            f"./output/{trait}/botorch{run_name}_result_{seed}.npy",
             encoding="utf8",
         )  # store botorch search results
 
