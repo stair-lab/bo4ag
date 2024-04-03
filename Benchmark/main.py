@@ -4,6 +4,7 @@ import time
 import argparse
 from tqdm import tqdm
 
+from dnn import NNSurrogate
 from botorch.models import SingleTaskGP
 from botorch.fit import fit_gpytorch_mll
 from gpytorch.mlls import ExactMarginalLogLikelihood
@@ -33,8 +34,7 @@ def getLookup(trait):
     lookup_tensor = torch.tensor(lookup.values, dtype=torch.float64)
     no_nan_lookup = torch.nan_to_num(lookup_tensor)
     no_nan_lookup[no_nan_lookup > 1] = 0
-    return no_nan_lookup
-    
+    return no_nan_lookup   
 
 def getKernel(kernel_name):
     covar_module = None
@@ -63,6 +63,7 @@ def main():
         "--kernel", default="rbf", help="Kernel function for the gaussian process"
     )
     parser.add_argument("--acq", default="EI", help="Acquisition function")
+    parser.add_argument("--model", default="gp", help="Surrogate Model (GP by default)")
     parser.add_argument("--n", type=int, default=300, help="Number of iterations")
     parser.add_argument("--gpu", type=int, default=0, help="Gpu id to run the job")
     args = parser.parse_args()
@@ -71,90 +72,7 @@ def main():
     global device
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     print(f"Device Used: {device}")
-
-#     if args.acq == "random":
-#         runRandom(args)
-#     else:
-#         runBO(args)
     runBO(args)
-    return
-
-def runRandom(args):
-    n = args.n  # replace this
-    trait = args.env
-    seeds = 5  # consider replacing this
-    acq_name = "random"
-    lookup = getLookup(args.env)
-
-    # check the lookup table
-    assert not torch.isnan(torch.sum(lookup))
-    assert not torch.isinf(torch.sum(lookup))
-
-    print(f"Running {trait}, random search...")
-    for seed in range(0, seeds):  # seed one is already run and stuff
-        torch.manual_seed(seed)
-        tic = time.perf_counter()  # start time
-
-        train_X = torch.rand(10, 2, dtype=torch.float64, device=device) * (
-            lookup.shape[0] - 1
-        )
-        train_Y = torch.tensor(
-            [
-                lookup[int(train_X[i][0]), int(train_X[i][1])]
-                for i in range(0, len(train_X))
-            ],
-            dtype=torch.float64,
-            device=device,
-        ).reshape(-1, 1)
-
-        _result = []
-        for i in tqdm(range(n)):
-            new_X = torch.rand(
-                (1, 2),
-                dtype=torch.float64,
-                device=device,
-            )
-            new_X = new_X * 2150  # adjust to match bounds
-            new_Y = torch.tensor(
-                [lookup[int(new_X[0][0]), int(new_X[0][1])]],
-                dtype=torch.float64,
-                device=device,
-            ).reshape(-1, 1)
-            # add new candidate
-            train_X = torch.cat([train_X, new_X])
-            train_Y = torch.cat([train_Y, new_Y])
-
-            # end timer and add
-            toc = time.perf_counter()  # end time
-            _result.append([new_Y[0][0].item(), toc - tic, new_X[0]])
-            
-
-        # save all your queries
-        torch.save(train_X, f"./output/{trait}/botorch{acq_name}_X_{seed}.npy")
-        torch.save(train_Y, f"./output/{trait}/botorch{acq_name}_Y_{seed}.npy")
-
-        # organize the list to have running best
-        best = [0, 0, 0]  # format is [time, best co-heritabilty]
-        botorch_result = []
-        for i in _result:
-            if i[0] > best[0]:
-                best = i
-            botorch_result.append(
-                [best[0], i[1], best[2]]
-            )  # append [best so far, current time]
-        print("Best From Run: ", best)
-
-        # store results
-        botorch_result = pd.DataFrame(
-            botorch_result, columns=["Best", "Time", "Candidate"]
-        )
-        botorch_result.to_csv(
-            f"./output/{trait}/botorch{acq_name}_result_{seed}.npy", encoding="utf8"
-        )  # store botorch search results
-
-        # print full time
-        toc = time.perf_counter()  # end time
-        print("BoTorch Took ", (toc - tic), "seconds")
     return
 
 def getCoordTensor(size=2150):
@@ -169,8 +87,13 @@ def calcLoss(model, train_X, lookup, **kwargs):
     m = 3000 #size of validation set
     
     val_X = torch.rand(m, 2, dtype=torch.float64, device=device) * 2150
-    val_Y = model.posterior(val_X).mean.detach()
-    train_Y = model.posterior(train_X).mean.detach()
+    if isinstance(model, NNSurrogate):
+        model.eval()
+        val_Y = model(val_X)
+        train_Y = model(train_X)
+    else:
+        val_Y = model.posterior(val_X).mean.detach()
+        train_Y = model.posterior(train_X).mean.detach()
     
     train_loss = torch.mean((train_Y - lookup(train_X))**2)
     val_loss = torch.mean((val_Y - lookup(val_X))**2)
@@ -185,6 +108,7 @@ def runBO(args):
     acq_name = args.acq
     kernel_name = args.kernel
     kernel = getKernel(kernel_name)
+    model_name = args.model
   
     # create function for querying the environment
     table = getLookup(args.env)
@@ -215,19 +139,32 @@ def runBO(args):
         _curve = {"n": [], "train_loss": [] , "val_loss": []}
         run_name = f"{acq_name}_{kernel_name}"
         for i in tqdm(range(n)):
-            gp = SingleTaskGP(
-                train_X,
-                train_Y,
-                covar_module=kernel,
-                outcome_transform=Standardize(1),
-                input_transform=Normalize(train_X.shape[-1]),
-            )
+            # set amd train the surrogate model
+            if model_name == "gp":
+                gp = SingleTaskGP(
+                    train_X,
+                    train_Y,
+                    covar_module=kernel,
+                    outcome_transform=Standardize(1),
+                    input_transform=Normalize(train_X.shape[-1]),
+                )
 
-            mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
-            fit_gpytorch_mll(mll)
+                mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
+                fit_gpytorch_mll(mll)
+                model = gp
+            elif model_name == "dnn": 
+                '''
+                Note: dnn surrogate can only work with random search
+                '''
+                run_name = f"{acq_name}_{model_name}"
+                model = NNSurrogate().to(device)
+                model.fit(train_X, train_Y)
+            else:
+                print("Not a valid surrogate model")  # should also throw error
             
+            #query from acquition function
             if acq_name == "random":
-                run_name = f"{acq_name}"
+                #run_name = f"{acq_name}"
                 new_X = torch.rand((1, 2), dtype=torch.float64, device=device,)
                 new_X = new_X * 2150  # adjust to match bounds
             else: 
@@ -264,10 +201,11 @@ def runBO(args):
             
             #calculate validation loss here 
             kwargs = {"seed": seed,}
-            train_loss, val_loss = calcLoss(gp, train_X, lookup, **kwargs)
+            train_loss, val_loss = calcLoss(model, train_X, lookup, **kwargs)
             _curve["train_loss"].append(train_loss.item())
             _curve["val_loss"].append(val_loss.item())
             _curve["n"].append(i)
+            print(f"train loss: {train_loss}, validation loss: {val_loss}")
             
             # add new candidate
             train_X = torch.cat([train_X, new_X])
