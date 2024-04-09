@@ -156,7 +156,6 @@ def runBO(args):
                 '''
                 Note: dnn surrogate can only work with random search
                 '''
-                run_name = f"{acq_name}_{model_name}"
                 model = NNSurrogate().to(device)
                 model.fit(train_X, train_Y)
             else:
@@ -164,7 +163,10 @@ def runBO(args):
             
             #query from acquition function
             if acq_name == "random":
-                #run_name = f"{acq_name}"
+                run_name = f"{acq_name}_{model_name}"
+                if model_name == "gp":
+                    run_name = f"{acq_name}_{kernel_name}"
+                    
                 new_X = torch.rand((1, 2), dtype=torch.float64, device=device,)
                 new_X = new_X * 2150  # adjust to match bounds
             else: 
