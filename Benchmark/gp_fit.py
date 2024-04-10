@@ -9,25 +9,27 @@ from botorch.fit import fit_gpytorch_mll
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from botorch.models.transforms.outcome import Standardize
 from botorch.models.transforms import Normalize
-from botorch.optim import optimize_acqf
+import argparse
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def getLookup(trait):
+def getLookup(trait, transform=None):
     path = f"./data/{trait}_coh2.csv"
     lookup = pd.read_csv(path, header=0)
 
     lookup_tensor = torch.tensor(lookup.values, dtype=torch.float64)
     no_nan_lookup = torch.nan_to_num(lookup_tensor)
     no_nan_lookup[no_nan_lookup > 1] = 0
+    
+    #if transform...
     return no_nan_lookup
 
-
-def calcLoss(model, train_X, lookup, **kwargs):
+def calcMSE(model, train_X, lookup, **kwargs):
     seed = kwargs.get("seed", None)
-    torch.manual_seed(seed+1234)
-    m = 3000  # size of validation set
+    m = kwargs.get("m", None) # size of validation set
+    
+    torch.manual_seed(seed + 1234)
 
     val_X = torch.rand(m, 2, dtype=torch.float64, device=device) * 2150
     val_Y = model.posterior(val_X).mean.detach()
@@ -39,9 +41,10 @@ def calcLoss(model, train_X, lookup, **kwargs):
 
 def calcR2(model, train_X, lookup, **kwargs):
     seed = kwargs.get("seed", None)
+    m = kwargs.get("m", None) # size of validation set
+    
     torch.manual_seed(seed + 1234)
-    m = 3000  # size of validation set
-
+    
     val_X = torch.rand(m, 2, dtype=torch.float64, device=device) * 2150
     val_Y = model.posterior(val_X).mean.detach()
     train_Y = model.posterior(train_X).mean.detach()
@@ -65,10 +68,10 @@ def calcR2(model, train_X, lookup, **kwargs):
     return R2_train, R2_val
 
 
-def main():
+def main(args):
     seeds = 5
-    n = 100
-    trait = "narea"  # options are narea, sla, pn, ps
+    n = args.n
+    trait = args.env  # options are narea, sla, pn, ps
 
     # directory to save results
     timestamp = time.strftime("%Y%m%d-%H%M%S")
@@ -84,15 +87,19 @@ def main():
 
     for seed in range(0, seeds):
         torch.manual_seed(seed)  # setting seed
+        
+        #query all random points
+        full_train_X = torch.rand(n+10, 2, dtype=torch.float64, device=device) * 2150
+        full_train_Y = lookup(full_train_X)
+        print(full_train_X[:20])
+        exit()
 
         # main loop
         _result = {"n": [], "train_loss": [], "val_loss": [], "best": []}
         for i in tqdm(range(n)):
-            
-            #query random points
-            train_X = torch.rand(i+10, 2, dtype=torch.float64, device=device) * 2150
-            train_Y = lookup(train_X)
-            
+            #select training points
+            train_X, train_Y = full_train_X[:i+10], full_train_Y[:i+10]
+
             #fit the gp
             gp = SingleTaskGP(
                 train_X,
@@ -104,9 +111,8 @@ def main():
             fit_gpytorch_mll(mll)
 
             # calculate validation loss and record results
-            kwargs = {
-                "seed": seed,
-            }
+            kwargs = vars(args)
+            kwargs["seed"] = seed
             train_loss, val_loss = calcR2(gp, train_X, lookup, **kwargs)
             _result["train_loss"].append(train_loss.item())
             _result["val_loss"].append(val_loss.item())
@@ -114,15 +120,21 @@ def main():
             _result["best"].append(max(train_Y).item())
             # print(f"train loss: {train_loss}, validation loss: {val_loss}")
 
-        # save results
-        _result = pd.DataFrame(_result)
-        _result.to_csv(
-            f"./output/{timestamp}/gp_{seed}.npy",
-            encoding="utf8",
-        )
+#         # save results
+#         _result = pd.DataFrame(_result)
+#         _result.to_csv(
+#             f"./output/{timestamp}/gp_{seed}.npy",
+#             encoding="utf8",
+#         )
     return
 
 
 if __name__ == "__main__":
-    
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--env", help="Environment to run search.")
+    parser.add_argument("--n", type=int, default=300, help="Number of random points in training set")
+    parser.add_argument("--m", type=int, default=3000, help="Number of random points in validation set")
+    #parser.add_argument("--loss", default="MSE", help="=Type of loss function")
+    parser.add_argument("--gpu", type=int, default=0, help="Gpu id to run the job")
+    args = parser.parse_args()
+    main(args)
