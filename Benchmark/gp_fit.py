@@ -41,10 +41,6 @@ def getLookup(trait, transform=None):
         flat_lookup = no_nan_lookup.reshape(-1)
         fitted_data, fitted_lambda = stats.boxcox(flat_lookup)
         unflat_lookup = no_nan_lookup.reshape(no_nan_lookup.shape)
-        
-        print((unflat_lookup - no_nan_lookup))
-        print(no_nan_lookup)
-        exit()
         return stadardize(unflat_lookup) #standardize
     elif transform is not None:
         print(f"{transform} is not a valid input tranform...")
@@ -158,14 +154,13 @@ def main(args):
         )
     return
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--env", help="Environment to run search.")
     parser.add_argument("--n", type=int, default=300, help="Number of random points in training set")
     parser.add_argument("--m", type=int, default=3000, help="Number of random points in validation set")
     parser.add_argument("--transform", default=None, help="Transforming on the search space")
-    #parser.add_argument("--loss", default="MSE", help="=Type of loss function")
+    #parser.add_argument("--loss", default="MSE", help="=Type of loss function") #add this later
     parser.add_argument("--gpu", type=int, default=0, help="Gpu id to run the job")
     args = parser.parse_args()
     
