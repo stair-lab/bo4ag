@@ -1,331 +1,255 @@
-import numpy as np
-import torch 
+import torch
 import pandas as pd
-import matplotlib.pyplot as plt
-import pickle
 import time
-import sys
 import argparse
 from tqdm import tqdm
 
-import torch
-from botorch.models import SingleTaskGP, FixedNoiseGP
+from dnn import NNSurrogate
+from botorch.models import SingleTaskGP
 from botorch.fit import fit_gpytorch_mll
-from botorch.utils import standardize
 from gpytorch.mlls import ExactMarginalLogLikelihood
+
+# from botorch.utils import standardize
 from botorch.models.transforms.outcome import Standardize
-from botorch.models.transforms import Normalize #this might make things take longer to calculate??? 
+from botorch.models.transforms import Normalize
 from gpytorch.kernels import MaternKernel, ScaleKernel, RBFKernel, SpectralMixtureKernel
-from botorch.utils.transforms import standardize
-
 from botorch.optim import optimize_acqf
-from botorch.acquisition import qUpperConfidenceBound 
-from botorch.acquisition import qExpectedImprovement, qProbabilityOfImprovement, qKnowledgeGradient#, 
-from botorch.acquisition.max_value_entropy_search import qMaxValueEntropy
-from botorch.sampling.pathwise.posterior_samplers import draw_matheron_paths
+from botorch.acquisition import (
+    qUpperConfidenceBound,
+    qExpectedImprovement,
+    qProbabilityOfImprovement,
+    qKnowledgeGradient,
+)
+# from botorch.acquisition.max_value_entropy_search import qMaxValueEntropy
 
-#set device here
-device = torch.device("cuda:9" if torch.cuda.is_available() else "cpu") 
-print(device)
+# set device here
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 def getLookup(trait):
-#     names = {"narea": "Narea", "sla": "SLA", "ps": "PLSR_SLA_Sorghum", "pn": "FS_PLSR_Narea"}
-#     trait = trait.lower()
-#     trait = names[trait]
-    
-#     base_path = "/dfs/scratch0/ruhana/GenCor"
-#     path = f"{base_path}/Table-Env/table_env/envs/csv_files/{trait}_Full_Analysis.csv"
-#     csv_mat = np.genfromtxt(path, delimiter=',' )
-#     x_starter, x_end, y_starter, y_end, lookup = csv_mat[0,1], csv_mat[0,-1], csv_mat[1,0], csv_mat[-1,0], csv_mat[1:, 1:]
     path = f"./data/{trait}_coh2.csv"
     lookup = pd.read_csv(path, header=0)
-    
-    ##fix formatting
+
+    # fix formatting
     lookup_tensor = torch.tensor(lookup.values, dtype=torch.float64)
     no_nan_lookup = torch.nan_to_num(lookup_tensor)
-#     count_above_1 = (no_nan_lookup > 1).sum().item()
-#     values_above_1 = lookup_tensor[lookup_tensor > 1]
-#     print(values_above_1)
-#     exit()
     no_nan_lookup[no_nan_lookup > 1] = 0
-    return no_nan_lookup
+    return no_nan_lookup   
 
 def getKernel(kernel_name):
     covar_module = None
-    if kernel_name == "matern52": covar_module = ScaleKernel(MaternKernel(nu=5/2, ard_num_dims=2)) 
-    elif kernel_name == "matern32": covar_module = ScaleKernel(MaternKernel(nu=3/2, ard_num_dims=2)) 
-    elif kernel_name == "matern12": covar_module = ScaleKernel(MaternKernel(nu=1/2, ard_num_dims=2)) 
-    elif kernel_name == "rbf": covar_module =  ScaleKernel(RBFKernel())
-    elif "spectral" in kernel_name: 
+    if kernel_name == "matern52":
+        covar_module = ScaleKernel(MaternKernel(nu=5 / 2, ard_num_dims=2))
+    elif kernel_name == "matern32":
+        covar_module = ScaleKernel(MaternKernel(nu=3 / 2, ard_num_dims=2))
+    elif kernel_name == "matern12":
+        covar_module = ScaleKernel(MaternKernel(nu=1 / 2, ard_num_dims=2))
+    elif kernel_name == "rbf":
+        covar_module = ScaleKernel(RBFKernel())
+    elif "spectral" in kernel_name:
         _, num_mixtures = kernel_name.split("-")
         num_mixtures = int(num_mixtures)
         covar_module = SpectralMixtureKernel(num_mixtures=num_mixtures, ard_num_dims=2)
     else:
-        print("Not a valid kernel") #should also throw error
+        print("Not a valid kernel")  # should also throw error
     return covar_module
 
+    
 def main():
     parser = argparse.ArgumentParser()
-    
-    parser.add_argument('--env', help='Environment to run search.')
-    parser.add_argument('--kernel', default='rbf',
-                        help='Kernel function for the gaussian process')
-    parser.add_argument('--acq', default='EI', help='Acquisition function')
-    parser.add_argument('--n', type=int, default=300, help='Number of iterations')
-    
+
+    parser.add_argument("--env", help="Environment to run search.")
+    parser.add_argument(
+        "--kernel", default="rbf", help="Kernel function for the gaussian process"
+    )
+    parser.add_argument("--acq", default="EI", help="Acquisition function")
+    parser.add_argument("--model", default="gp", help="Surrogate Model (GP by default)")
+    parser.add_argument("--n", type=int, default=300, help="Number of iterations")
+    parser.add_argument("--gpu", type=int, default=0, help="Gpu id to run the job")
     args = parser.parse_args()
     
-    if args.acq == "random":
-        runRandom(args)
-    else:
-        runBO(args)
-    return 
-
-def runRandom(args):
-    n = args.n #replace this
-    trait = args.env
-    seeds = 5 #consider replacing this
-    acq_name = "random"
-    
-    #get lookup environment
-    lookup = getLookup(args.env)
-    ub, lb = 2150, 0
-
-    #check the lookup table
-    #not sure about this lookup table...
-    assert torch.isnan(torch.sum(lookup)) == False 
-    assert torch.isinf(torch.sum(lookup)) == False
-    
-    ##main bayes_opt training loop
-    train_X = torch.empty((0, 2), dtype=torch.float64, device=device)
-    train_Y = torch.empty((0, 1), dtype=torch.float64, device=device)
-
-    print(f"Running {trait}, random search...")
-    for seed in range(0,seeds): #seed one is already run and stuff
-        torch.manual_seed(seed)
-        tic = time.perf_counter() #start time
-        
-        _result = []
-        for i in tqdm(range(n)):
-            new_X = torch.rand((1, 2), dtype=torch.float64, device=device,)
-            new_X = new_X * (ub - lb) + lb #adjust to match bounds
-            new_Y = torch.tensor([lookup[int(new_X[0][0]), int(new_X[0][1])]], 
-                                 dtype=torch.float64, 
-                                 device=device).reshape(-1, 1)
-            #add new candidate
-            train_X = torch.cat([train_X, new_X])
-            train_Y = torch.cat([train_Y, new_Y])
-
-            #end timer and add
-            toc = time.perf_counter() #end time
-            _result.append([new_Y[0][0].item(), toc - tic, new_X[0]])
-
-        #save all your queries
-        torch.save(train_X, f"./output/{trait}/botorch{acq_name}_X_{seed}.npy")
-        torch.save(train_Y, f"./output/{trait}/botorch{acq_name}_Y_{seed}.npy")
-
-        #organize the list to have running best
-        best = [0,0,0] # format is [time, best co-heritabilty]
-        botorch_result = []
-        for i in _result:
-            if i[0] > best[0]:
-                best = i
-            botorch_result.append([best[0], i[1], best[2]]) # append [best so far, current time]
-        print("Best From Run: ", best)
-
-        #store results
-        botorch_result = pd.DataFrame(botorch_result, columns=["Best", "Time", "Candidate"])
-        botorch_result.to_csv(f"./output/{trait}/botorch{acq_name}_result_{seed}.npy", encoding='utf8') #store botorch search results
-
-        #print full time
-        toc = time.perf_counter() #end time
-        print("BoTorch Took ", (toc-tic) ,"seconds")
-    
-    return 
+    #set device globally
+    global device
+    device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
+    print(f"Device Used: {device}")
+    runBO(args)
+    return
 
 def getCoordTensor(size=2150):
-    x = torch.arange(size)
-    y = torch.arange(size)
-
-    # Create a grid of x and y coordinates
+    x, y = torch.arange(size), torch.arange(size)
     X, Y = torch.meshgrid(x, y)
-
-    # Combine x and y coordinates into a single tensor
-    coordinates_tensor = torch.stack((X, Y), dim=-1).reshape(-1,2)
+    coordinates_tensor = torch.stack((X, Y), dim=-1).reshape(-1, 2)
     return coordinates_tensor.to(device, torch.float64)
 
-def argmax_random_tie_breaking(tensor):
-    # Check if the input is a vector
-    if tensor.dim() != 1:
-        raise ValueError("argmax_random_tie_breaking only supports vectors.")
+def calcLoss(model, train_X, lookup, **kwargs):
+    seed = kwargs.get('seed', None)
+    torch.manual_seed(seed) 
+    m = 3000 #size of validation set
     
-    # Find the maximum value in the tensor
-    max_value = tensor.max()
+    val_X = torch.rand(m, 2, dtype=torch.float64, device=device) * 2150
+    if isinstance(model, NNSurrogate):
+        model.eval()
+        val_Y = model(val_X)
+        train_Y = model(train_X)
+    else:
+        val_Y = model.posterior(val_X).mean.detach()
+        train_Y = model.posterior(train_X).mean.detach()
     
-    # Find all indices where the maximum value occurs
-    max_indices = torch.where(tensor == max_value)[0]
-    
-    # If there is only one maximum value, return its index
-    if len(max_indices) == 1:
-        return max_indices[0]
-    
-    # If there are multiple maximum values, randomly select one of the indices
-    random_idx = torch.randint(0, len(max_indices), (1,)).item()
-    return max_indices[random_idx]
-
+    train_loss = torch.mean((train_Y - lookup(train_X))**2)
+    val_loss = torch.mean((val_Y - lookup(val_X))**2)
+    return train_loss, val_loss
 
 def runBO(args):
-    num_restarts = 128  
+    num_restarts = 128
     raw_samples = 128
-    n = args.n #replace this
+    n = args.n  # replace this
     trait = args.env
-    seeds = 5 #consider replacing this
+    seeds = 5  # consider replacing this
     acq_name = args.acq
     kernel_name = args.kernel
     kernel = getKernel(kernel_name)
-    
-    #get lookup environment
-    lookup = getLookup(args.env)
-    lookup = standardize(lookup)
-    bounds = torch.stack([torch.zeros(2).double(), torch.ones(2).double() * (lookup.shape[0]-1)]).to(device, torch.float64)
+    model_name = args.model
+  
+    # create function for querying the environment
+    table = getLookup(args.env)
+    def lookup(X):
+        X_indices = X.long().cpu() 
+        Y = table[X_indices[:, 0], X_indices[:, 1]].reshape(-1, 1)
+        return Y.to(device, torch.float64)
 
-    #check the lookup table
-    assert torch.isnan(torch.sum(lookup)) == False 
-    assert torch.isinf(torch.sum(lookup)) == False
+    bounds = torch.stack(
+        [torch.zeros(2).double(), torch.ones(2).double() * 2150]
+    ).to(device, torch.float64)
+    
+    # check the lookup table
+    assert not torch.isnan(torch.sum(table))
+    assert not torch.isinf(torch.sum(table))
 
     print(f"Running {trait}, {args.acq}-{kernel_name}...")
-    for seed in range(0,seeds): #seed one is already run and stuff
-        tic = time.perf_counter() #start time
+    for seed in range(0, seeds):  # seed one is already run and stuff
+        tic = time.perf_counter()  # start time
 
-        ##collect random points as training points
-        torch.manual_seed(seed) #setting seed
-        train_X = torch.rand(10, 2, dtype=torch.float64, device=device) * (lookup.shape[0]-1)
-        train_Y = torch.tensor([lookup[int(train_X[i][0]), int(train_X[i][1])] for i in range(0, len(train_X))], 
-                               dtype=torch.float64, 
-                               device=device)
-        train_Y = train_Y.reshape(-1, 1)
+        # collect random points as training points
+        torch.manual_seed(seed)  # setting seed
+        train_X = torch.rand(10, 2, dtype=torch.float64, device=device) * 2150
+        train_Y = lookup(train_X)
 
-        ##main bayes_opt training loop
+        # main bayes_opt training loop
         _result = []
+        _curve = {"n": [], "train_loss": [] , "val_loss": []}
+        run_name = f"{acq_name}_{kernel_name}"
         for i in tqdm(range(n)):
-#             if "spectral" in acq_name :
-#                 kernel = kernel.initialize_from_data(train_X, train_Y)
-                
-#             gp = SingleTaskGP(
-#                 train_X, train_Y, 
-#                 covar_module = kernel,
-# #                 outcome_transform=Standardize(1), 
-#                 input_transform=Normalize(train_X.shape[-1])
-#             )
+            # set amd train the surrogate model
+            if model_name == "gp":
+                gp = SingleTaskGP(
+                    train_X,
+                    train_Y,
+                    covar_module=kernel,
+                    outcome_transform=Standardize(1),
+                    input_transform=Normalize(train_X.shape[-1]),
+                )
 
-            gp = FixedNoiseGP(
-                train_X, train_Y,
-                train_Yvar = torch.full_like(train_Y, 1e-4),
-                covar_module = kernel,
-                # outcome_transform=Standardize(1), 
-                input_transform=Normalize(train_X.shape[-1])
-            )
-
-            mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
-            fit_gpytorch_mll(mll)
-            
-            test_X = getCoordTensor(2150)
-            pred_Y = []
-            for i in tqdm(range(46230)):
-                pred_Y_ = gp.posterior(test_X[i*100:(i+1)*100]).mean.detach()
-                pred_Y.append(pred_Y_.squeeze())
-            pred_Y = torch.concat(pred_Y)
-            
-            val_loss = abs(pred_Y - train_Y).mean()
-            print("val_loss: ", val_loss)
-            
-            #select acquisition function
-            if "UCB" in acq_name:
-                _, beta = acq_name.split("-")
-                beta = float(beta)
-                acq = qUpperConfidenceBound(gp, beta=beta)
-            elif acq_name == "EI": #working
-                acq = qExpectedImprovement(gp, best_f=max(train_Y))
-            elif acq_name == "PI": #working
-                acq = qProbabilityOfImprovement(gp, best_f=max(train_Y))
-            elif acq_name == "KG": #working
-                num_restarts = 10
-                acq = qKnowledgeGradient(gp)
-#             elif acq_name == "MES":
-#                 x1_values = np.linspace(0, 2150, 2150)
-#                 x2_values = np.linspace(0, 2150, 2150)
-#                 x1, x2 = np.meshgrid(x1_values, x2_values)
-#                 candidates = np.vstack([x1.ravel(), x2.ravel()]).T
-#                 candidates = torch.from_numpy(candidates).to(device=device)
-#                 acq = qMaxValueEntropy(gp, candidates)
+                mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
+                fit_gpytorch_mll(mll)
+                model = gp
+            elif model_name == "dnn": 
+                '''
+                Note: dnn surrogate can only work with random search
+                '''
+                model = NNSurrogate().to(device)
+                model.fit(train_X, train_Y)
             else:
-                print(f"{acq_name} is not a valid acquisition function")
-   
-            test_X = getCoordTensor(2150)
-            test_Y = []
-        
-            f = draw_matheron_paths(gp, torch.Size([1]))
-            for i in tqdm(range(4623)):
-                test_Y_ = f(test_X[i*1000:(i+1)*1000]).detach()
-                test_Y.append(test_Y_.squeeze())
+                print("Not a valid surrogate model")  # should also throw error
             
-            test_Y = torch.concat(test_Y)
+            #query from acquition function
+            if acq_name == "random":
+                run_name = f"{acq_name}_{model_name}"
+                if model_name == "gp":
+                    run_name = f"{acq_name}_{kernel_name}"
+                    
+                new_X = torch.rand((1, 2), dtype=torch.float64, device=device,)
+                new_X = new_X * 2150  # adjust to match bounds
+            else: 
+                #all acquition functions which use `optimize_acqf` as the optimizer
+                if "UCB" in acq_name:
+                    _, beta = acq_name.split("-")
+                    beta = float(beta)
+                    acq = qUpperConfidenceBound(gp, beta=beta)
+                elif acq_name == "EI":  # working
+                    acq = qExpectedImprovement(gp, best_f=max(train_Y))
+                elif acq_name == "PI":  # working
+                    acq = qProbabilityOfImprovement(gp, best_f=max(train_Y))
+                elif acq_name == "KG":  # working
+                    num_restarts = 10
+                    acq = qKnowledgeGradient(gp)
+                elif acq_name == "MES":
+                    continue
+                # TODO
+                #                 x1_values = np.linspace(0, 2150, 2150)
+                #                 x2_values = np.linspace(0, 2150, 2150)
+                #                 x1, x2 = np.meshgrid(x1_values, x2_values)
+                #                 candidates = np.vstack([x1.ravel(), x2.ravel()]).T
+                #                 candidates = torch.from_numpy(candidates).to(device=device)
+                else:
+                    print(f"{acq_name} is not a valid acquisition function")
+                new_X, acq_value = optimize_acqf(
+                    acq,
+                    q=1,
+                    bounds=bounds,
+                    num_restarts=num_restarts,
+                    raw_samples=raw_samples,
+                )
+            new_Y = lookup(new_X)
             
-            # ind = torch.argmax(test_Y)
-            ind = argmax_random_tie_breaking(test_Y)
-            new_X = test_X[ind].reshape(-1,2)
-            print("Next query: ", new_X)
-            print("Next predictive value: ", test_Y[ind])
-
-            new_Y = torch.tensor([lookup[int(new_X[0][0]), int(new_X[0][1])]], 
-                     dtype=torch.float64, 
-                     device=device).reshape(-1, 1)
-            print("Next value: ", new_Y)
-
-#             new_X_grad, acq_value = optimize_acqf(
-#                 acq, 
-#                 q=1, 
-#                 bounds=bounds, 
-#                 num_restarts=num_restarts, 
-#                 raw_samples=raw_samples)
-#             new_Y_grad = torch.tensor([lookup[int(new_X_grad[0][0]), int(new_X_grad[0][1])]], 
-#                      dtype=torch.float64, 
-#                      device=device).reshape(-1, 1)
-#             print("Next query grad: ", new_X_grad)
-#             print("Next value grad: ", new_Y_grad)
-        
-            #add new candidate
+            #calculate validation loss here 
+            kwargs = {"seed": seed,}
+            train_loss, val_loss = calcLoss(model, train_X, lookup, **kwargs)
+            _curve["train_loss"].append(train_loss.item())
+            _curve["val_loss"].append(val_loss.item())
+            _curve["n"].append(i)
+            print(f"train loss: {train_loss}, validation loss: {val_loss}")
+            
+            # add new candidate
             train_X = torch.cat([train_X, new_X])
             train_Y = torch.cat([train_Y, new_Y])
-            
-            best_idx = torch.argmax(train_Y)
-            print("Best location: ",  train_X[best_idx])
-            print("Best output value: ", train_Y[best_idx])
 
-            #end timer and add
-            toc = time.perf_counter() #end time
+            # end timer and add
+            toc = time.perf_counter()  # end time
             _result.append([new_Y[0][0].item(), toc - tic, new_X[0]])
 
-
-        #save all your queries
-        torch.save(train_X, f"./output/{trait}/botorch{acq_name}_{kernel_name}_X_{seed}.npy")
-        torch.save(train_Y, f"./output/{trait}/botorch{acq_name}_{kernel_name}_Y_{seed}.npy")
-
-        #organize the list to have running best
-        best = [0,0,0] # format is [time, best co-heritabilty]
+        # save all your queries
+        torch.save(train_X, f"./output/{trait}/botorch{run_name}_X_{seed}.npy")
+        torch.save(train_Y, f"./output/{trait}/botorch{run_name}_Y_{seed}.npy")
+        
+        #save learning curve
+        curve_df = pd.DataFrame(_curve)
+        curve_df.to_csv(f"./output/{trait}/botorch{run_name}_curve_{seed}.npy",
+            encoding="utf8",)
+        
+        # organize the list to have running best
+        best = [0, 0, 0]  # format is [time, best co-heritabilty]
         botorch_result = []
         for i in _result:
             if i[0] > best[0]:
                 best = i
-            botorch_result.append([best[0], i[1], best[2]]) # append [best so far, current time]
+            botorch_result.append(
+                [best[0], i[1], best[2]]
+            )  # append [best so far, current time]
         print("Best From Run: ", best)
 
-        #store results
-        botorch_result = pd.DataFrame(botorch_result, columns=["Best", "Time", "Candidate"])
-        botorch_result.to_csv(f"./output/{trait}/botorch{acq_name}_{kernel_name}_result_{seed}.npy", encoding='utf8') #store botorch search results
+        # store results
+        botorch_result = pd.DataFrame(
+            botorch_result, columns=["Best", "Time", "Candidate"]
+        )
+        botorch_result.to_csv(
+            f"./output/{trait}/botorch{run_name}_result_{seed}.npy",
+            encoding="utf8",
+        )  # store botorch search results
 
-        #print full time
-        toc = time.perf_counter() #end time
-        print("BoTorch Took ", (toc-tic) ,"seconds")
+        # print full time
+        toc = time.perf_counter()  # end time
+        print("BoTorch Took ", (toc - tic), "seconds")
+        
+    return
 
 main()
