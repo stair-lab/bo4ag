@@ -9,19 +9,20 @@ import argparse
 from tqdm import tqdm
 
 import torch
-from botorch.models import SingleTaskGP
+from botorch.models import SingleTaskGP, FixedNoiseGP
 from botorch.fit import fit_gpytorch_mll
 from botorch.utils import standardize
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from botorch.models.transforms.outcome import Standardize
 from botorch.models.transforms import Normalize #this might make things take longer to calculate??? 
 from gpytorch.kernels import MaternKernel, ScaleKernel, RBFKernel, SpectralMixtureKernel
-
+from botorch.utils.transforms import standardize
 
 from botorch.optim import optimize_acqf
 from botorch.acquisition import qUpperConfidenceBound 
 from botorch.acquisition import qExpectedImprovement, qProbabilityOfImprovement, qKnowledgeGradient#, 
 from botorch.acquisition.max_value_entropy_search import qMaxValueEntropy
+from botorch.sampling.pathwise.posterior_samplers import draw_matheron_paths
 
 #set device here
 device = torch.device("cuda:9" if torch.cuda.is_available() else "cpu") 
@@ -36,7 +37,7 @@ def getLookup(trait):
 #     path = f"{base_path}/Table-Env/table_env/envs/csv_files/{trait}_Full_Analysis.csv"
 #     csv_mat = np.genfromtxt(path, delimiter=',' )
 #     x_starter, x_end, y_starter, y_end, lookup = csv_mat[0,1], csv_mat[0,-1], csv_mat[1,0], csv_mat[-1,0], csv_mat[1:, 1:]
-    path = f"/lfs/turing2/0/ruhana/gptransfer/Benchmark/data/{trait}_coh2.csv"
+    path = f"./data/{trait}_coh2.csv"
     lookup = pd.read_csv(path, header=0)
     
     ##fix formatting
@@ -153,6 +154,26 @@ def getCoordTensor(size=2150):
     coordinates_tensor = torch.stack((X, Y), dim=-1).reshape(-1,2)
     return coordinates_tensor.to(device, torch.float64)
 
+def argmax_random_tie_breaking(tensor):
+    # Check if the input is a vector
+    if tensor.dim() != 1:
+        raise ValueError("argmax_random_tie_breaking only supports vectors.")
+    
+    # Find the maximum value in the tensor
+    max_value = tensor.max()
+    
+    # Find all indices where the maximum value occurs
+    max_indices = torch.where(tensor == max_value)[0]
+    
+    # If there is only one maximum value, return its index
+    if len(max_indices) == 1:
+        return max_indices[0]
+    
+    # If there are multiple maximum values, randomly select one of the indices
+    random_idx = torch.randint(0, len(max_indices), (1,)).item()
+    return max_indices[random_idx]
+
+
 def runBO(args):
     num_restarts = 128  
     raw_samples = 128
@@ -165,6 +186,7 @@ def runBO(args):
     
     #get lookup environment
     lookup = getLookup(args.env)
+    lookup = standardize(lookup)
     bounds = torch.stack([torch.zeros(2).double(), torch.ones(2).double() * (lookup.shape[0]-1)]).to(device, torch.float64)
 
     #check the lookup table
@@ -189,15 +211,33 @@ def runBO(args):
 #             if "spectral" in acq_name :
 #                 kernel = kernel.initialize_from_data(train_X, train_Y)
                 
-            gp = SingleTaskGP(
-                train_X, train_Y, 
+#             gp = SingleTaskGP(
+#                 train_X, train_Y, 
+#                 covar_module = kernel,
+# #                 outcome_transform=Standardize(1), 
+#                 input_transform=Normalize(train_X.shape[-1])
+#             )
+
+            gp = FixedNoiseGP(
+                train_X, train_Y,
+                train_Yvar = torch.full_like(train_Y, 1e-4),
                 covar_module = kernel,
-                outcome_transform=Standardize(1), 
+                # outcome_transform=Standardize(1), 
                 input_transform=Normalize(train_X.shape[-1])
             )
 
             mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
             fit_gpytorch_mll(mll)
+            
+            test_X = getCoordTensor(2150)
+            pred_Y = []
+            for i in tqdm(range(46230)):
+                pred_Y_ = gp.posterior(test_X[i*100:(i+1)*100]).mean.detach()
+                pred_Y.append(pred_Y_.squeeze())
+            pred_Y = torch.concat(pred_Y)
+            
+            val_loss = abs(pred_Y - train_Y).mean()
+            print("val_loss: ", val_loss)
             
             #select acquisition function
             if "UCB" in acq_name:
@@ -221,32 +261,46 @@ def runBO(args):
             else:
                 print(f"{acq_name} is not a valid acquisition function")
    
-#             test_X = getCoordTensor(2150)
-#             test_Y = []
-#             for i in tqdm(range(3698//4)):
-#                 test_Y_ = acq(test_X[i*2500*2:(i+1)*2500*2])
-#                 test_Y.append(test_Y_.detach())
-                
-#             breakpoint()
-#             ind = torch.argmax(test_Y)
-#             new_X = test_X[ind].reshape(-1,2)
+            test_X = getCoordTensor(2150)
+            test_Y = []
+        
+            f = draw_matheron_paths(gp, torch.Size([1]))
+            for i in tqdm(range(4623)):
+                test_Y_ = f(test_X[i*1000:(i+1)*1000]).detach()
+                test_Y.append(test_Y_.squeeze())
             
-#             exit()
-    
-            new_X, acq_value = optimize_acqf(
-                acq, 
-                q=1, 
-                bounds=bounds, 
-                num_restarts=num_restarts, 
-                raw_samples=raw_samples)
+            test_Y = torch.concat(test_Y)
+            
+            # ind = torch.argmax(test_Y)
+            ind = argmax_random_tie_breaking(test_Y)
+            new_X = test_X[ind].reshape(-1,2)
+            print("Next query: ", new_X)
+            print("Next predictive value: ", test_Y[ind])
 
             new_Y = torch.tensor([lookup[int(new_X[0][0]), int(new_X[0][1])]], 
-                                 dtype=torch.float64, 
-                                 device=device).reshape(-1, 1)
-            
+                     dtype=torch.float64, 
+                     device=device).reshape(-1, 1)
+            print("Next value: ", new_Y)
+
+#             new_X_grad, acq_value = optimize_acqf(
+#                 acq, 
+#                 q=1, 
+#                 bounds=bounds, 
+#                 num_restarts=num_restarts, 
+#                 raw_samples=raw_samples)
+#             new_Y_grad = torch.tensor([lookup[int(new_X_grad[0][0]), int(new_X_grad[0][1])]], 
+#                      dtype=torch.float64, 
+#                      device=device).reshape(-1, 1)
+#             print("Next query grad: ", new_X_grad)
+#             print("Next value grad: ", new_Y_grad)
+        
             #add new candidate
             train_X = torch.cat([train_X, new_X])
             train_Y = torch.cat([train_Y, new_Y])
+            
+            best_idx = torch.argmax(train_Y)
+            print("Best location: ",  train_X[best_idx])
+            print("Best output value: ", train_Y[best_idx])
 
             #end timer and add
             toc = time.perf_counter() #end time
