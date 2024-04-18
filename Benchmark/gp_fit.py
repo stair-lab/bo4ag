@@ -6,7 +6,8 @@ import os
 import argparse
 
 from botorch.models import SingleTaskGP
-from botorch.fit import fit_gpytorch_mll
+from botorch.models.fully_bayesian import SaasFullyBayesianSingleTaskGP
+from botorch.fit import fit_gpytorch_mll, fit_fully_bayesian_model_nuts
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from botorch.models.transforms.outcome import Standardize
 from botorch.models.transforms import Normalize
@@ -40,10 +41,11 @@ def getLookup(trait, transform=None):
     elif transform == "box_cox":
         flat_lookup = no_nan_lookup.reshape(-1)
         fitted_data, fitted_lambda = stats.boxcox(flat_lookup)
-        unflat_lookup = no_nan_lookup.reshape(no_nan_lookup.shape)
+        unflat_lookup = torch.from_numpy(fitted_data).reshape(2151, 2151)
         return stadardize(unflat_lookup) #standardize
     elif transform is not None:
         print(f"{transform} is not a valid input tranform...")
+        
     
     return stadardize(no_nan_lookup) #standardize
 
@@ -95,6 +97,7 @@ def main(args):
     n = args.n
     trait = args.env  # options are narea, sla, pn, ps
     transform = args.transform
+    model = args.model_name
     
     # create function to querying the environment
     table = getLookup(trait, transform)
@@ -114,9 +117,8 @@ def main(args):
         return Y.to(device, torch.float64)
 
     for seed in range(0, seeds):
-        torch.manual_seed(seed)  # setting seed
-        
         #query all random points
+        torch.manual_seed(seed)  # setting seed
         full_train_X = torch.rand(n+10, 2, dtype=torch.float64, device=device) * 2150
         full_train_Y = lookup(full_train_X)
 
@@ -127,14 +129,24 @@ def main(args):
             train_X, train_Y = full_train_X[:i+10], full_train_Y[:i+10]
 
             #fit the gp
-            gp = SingleTaskGP(
-                train_X,
-                train_Y,
-                #outcome_transform=Standardize(1), moved standardize to the data loading part! (refer to getLookup())
-                input_transform=Normalize(train_X.shape[-1]),
-            )
-            mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
-            fit_gpytorch_mll(mll)
+            if model == "sass":
+                gp = SaasFullyBayesianSingleTaskGP(
+                    train_X,
+                    train_Y,
+                    outcome_transform=Standardize(1),
+                    input_transform=Normalize(train_X.shape[-1])
+                )
+                fit_fully_bayesian_model_nuts(gp)
+
+            else:
+                gp = SingleTaskGP(
+                    train_X,
+                    train_Y,
+                    outcome_transform=Standardize(1), 
+                    input_transform=Normalize(train_X.shape[-1]),
+                )
+                mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
+                fit_gpytorch_mll(mll)
 
             # calculate validation loss and record results
             kwargs = vars(args)
@@ -160,6 +172,7 @@ if __name__ == "__main__":
     parser.add_argument("--n", type=int, default=300, help="Number of random points in training set")
     parser.add_argument("--m", type=int, default=3000, help="Number of random points in validation set")
     parser.add_argument("--transform", default=None, help="Transforming on the search space")
+    parser.add_argument("--model_name", default="gp", help="Model to fit (default: SingleTaskGP)")
     #parser.add_argument("--loss", default="MSE", help="=Type of loss function") #add this later
     parser.add_argument("--gpu", type=int, default=0, help="Gpu id to run the job")
     args = parser.parse_args()
