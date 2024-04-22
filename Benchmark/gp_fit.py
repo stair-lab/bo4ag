@@ -13,6 +13,7 @@ from botorch.models.transforms.outcome import Standardize
 from botorch.models.transforms import Normalize
 
 from data_util import stadardize, getLookup
+from util import getKernel
 
 #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -65,16 +66,20 @@ def main(args):
     trait = args.env  # options are narea, sla, pn, ps
     transform = args.transform
     model = args.model_name
+    kernel = getKernel(args.kernel)
     
     # create function to querying the environment
     table = getLookup(trait, transform)
 
     # directory to save results
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    os.mkdir(f"./output/{timestamp}")
-    
+    run_name = args.run_name
+    if run_name == None:
+        run_name = time.strftime("%Y%m%d-%H%M%S")
+    if not os.path.isdir(f"./output/{run_name}"):
+        os.mkdir(f"./output/{run_name}")
+        
     #save args in a file
-    with open(f"./output/{timestamp}/args.txt", 'w') as file:
+    with open(f"./output/{run_name}/args.txt", 'w') as file:
         for key, value in vars(args).items():
             file.write(f"{key}: {value}\n")
     
@@ -96,13 +101,22 @@ def main(args):
             train_X, train_Y = full_train_X[:i+10], full_train_Y[:i+10]
 
             #fit the gp
-            if model == "sass":
-                gp = SaasFullyBayesianSingleTaskGP(
+            if model == "saas":
+                saas_gp = SaasFullyBayesianSingleTaskGP(
                     train_X,
                     train_Y,
                     outcome_transform=Standardize(1),
                     input_transform=Normalize(train_X.shape[-1])
                 )
+                gp = SingleTaskGP(
+                    train_X,
+                    train_Y,
+                    outcome_transform=Standardize(1), 
+                    input_transform=Normalize(train_X.shape[-1]),
+                )
+                #print(saas_gp.get_param_state(), gp.get_param_state(), gp.covar_module)
+                #exit()
+                
                 fit_fully_bayesian_model_nuts(gp,
                                              max_tree_depth=5,
                                               num_samples=128,
@@ -111,6 +125,7 @@ def main(args):
                 gp = SingleTaskGP(
                     train_X,
                     train_Y,
+                    covar_module=kernel,
                     outcome_transform=Standardize(1), 
                     input_transform=Normalize(train_X.shape[-1]),
                 )
@@ -130,7 +145,7 @@ def main(args):
         # save result
         _result = pd.DataFrame(_result)
         _result.to_csv(
-            f"./output/{timestamp}/gp_{seed}.npy",
+            f"./output/{run_name}/gp_{seed}.npy",
             encoding="utf8",
         )
     return
@@ -140,10 +155,12 @@ if __name__ == "__main__":
     parser.add_argument("--env", help="Environment to run search.")
     parser.add_argument("--n", type=int, default=300, help="Number of random points in training set")
     parser.add_argument("--m", type=int, default=3000, help="Number of random points in validation set")
-    parser.add_argument("--transform", default=None, help="Transforming on the search space")
+    parser.add_argument("--transform", default="standardized", help="Transforming on the search space")
     parser.add_argument("--model_name", default="gp", help="Model to fit (default: SingleTaskGP)")
+    parser.add_argument("--kernel", default=None, help="Model to fit (default: SingleTaskGP)")
     #parser.add_argument("--loss", default="MSE", help="=Type of loss function") #add this later
     parser.add_argument("--gpu", type=int, default=0, help="Gpu id to run the job")
+    parser.add_argument("--run_name", default=None, help="Name of the folder to move outputs.")
     args = parser.parse_args()
     
     #set global device
