@@ -15,12 +15,13 @@ from botorch.models.transforms import Normalize
 from data_util import stadardize, getLookup
 from util import getKernel, gp_mean_plot
 
-#device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 def calcMSE(model, train_X, lookup, **kwargs):
     seed = kwargs.get("seed", None)
-    m = kwargs.get("m", None) # size of validation set
-    
+    m = kwargs.get("m", None)  # size of validation set
+
     torch.manual_seed(seed + 1234)
 
     val_X = torch.rand(m, 2, dtype=torch.float64, device=device) * 2150
@@ -31,12 +32,13 @@ def calcMSE(model, train_X, lookup, **kwargs):
     val_loss = torch.mean((val_Y - lookup(val_X)) ** 2)
     return train_loss, val_loss
 
+
 def calcR2(model, train_X, lookup, **kwargs):
     seed = kwargs.get("seed", None)
-    m = kwargs.get("m", None) # size of validation set
-    
+    m = kwargs.get("m", None)  # size of validation set
+
     torch.manual_seed(seed + 1234)
-    
+
     val_X = torch.rand(m, 2, dtype=torch.float64, device=device) * 2150
     val_Y = model.posterior(val_X).mean.detach()
     train_Y = model.posterior(train_X).mean.detach()
@@ -67,55 +69,46 @@ def main(args):
     transform = args.transform
     model = args.model_name
     kernel = getKernel(args.kernel, device=device)
-    
+
     # create function to querying the environment
     table = getLookup(trait, transform)
 
-    # directory to save results
-    run_name = args.run_name
-    if run_name == None:
-        run_name = time.strftime("%Y%m%d-%H%M%S")
-    if not os.path.isdir(f"./output/{run_name}"):
-        os.mkdir(f"./output/{run_name}")
-        
-    #save args in a file
-    with open(f"./output/{run_name}/args.txt", 'w') as file:
-        for key, value in vars(args).items():
-            file.write(f"{key}: {value}\n")
-    
     def lookup(X):
         X_indices = X.long().cpu()
         Y = table[X_indices[:, 0], X_indices[:, 1]].reshape(-1, 1)
         return Y.to(device, torch.float64)
 
+    # create a directory to save results
+    run_name = args.run_name
+    if run_name == None:
+        run_name = time.strftime("%Y%m%d-%H%M%S")
+    if not os.path.isdir(f"./output/{run_name}"):
+        os.mkdir(f"./output/{run_name}")
+
+    # save args in a file
+    with open(f"./output/{run_name}/args.txt", "w") as file:
+        for key, value in vars(args).items():
+            file.write(f"{key}: {value}\n")
+
     for seed in range(0, seeds):
-        #query all random points
+        # query all random points
         torch.manual_seed(seed)  # setting seed
-        full_train_X = torch.rand(n+10, 2, dtype=torch.float64, device=device) * 2150
+        full_train_X = torch.rand(n + 10, 2, dtype=torch.float64, device=device) * 2150
         full_train_Y = lookup(full_train_X)
 
         # main loop
         _result = {"n": [], "train_loss": [], "val_loss": [], "best": []}
-        for i in tqdm(range(n)):
-            #select training points
-            train_X, train_Y = full_train_X[:i+10], full_train_Y[:i+10]
+        for i in tqdm(range(0, n+1, args.interval)):
+            # select training points
+            train_X, train_Y = full_train_X[: i + 10], full_train_Y[: i + 10]
             gp = SingleTaskGP(
                 train_X,
                 train_Y,
                 covar_module=kernel,
-                outcome_transform=Standardize(1), 
+                outcome_transform=Standardize(1),
                 input_transform=Normalize(train_X.shape[-1]),
             )
 
-            #this code is probably not necessary unless my inputs are in batches
-#             gp._subset_batch_dict = {
-#                 "mean_module.raw_constant": -1,
-#                 "covar_module.raw_outputscale": -1,
-#                 "covar_module.base_kernel.raw_lengthscale": -3,
-#                 "likelihood.noise_covar.raw_noise": -2
-#             }
-            
-            
             mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
             fit_gpytorch_mll(mll)
 
@@ -135,30 +128,32 @@ def main(args):
             f"./output/{run_name}/gp_{seed}.npy",
             encoding="utf8",
         )
-        
-        #save image and model here
-        if args.plot_posterior: 
+
+        # save image and model here
+        if args.plot_posterior:
             gp_mean_plot(gp, f"./output/{run_name}/gp_{seed}.png", device=device)
             torch.save(gp.state_dict(), f"./output/{run_name}/gp_model_{seed}.pth")
-       
+
     return
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--env", help="Environment to run search.")
-    parser.add_argument("--n", type=int, default=300, help="Number of random points in training set")
+    parser.add_argument("--n", type=int, default=3000, help="Largest number of random points fit during training")
     parser.add_argument("--m", type=int, default=3000, help="Number of random points in validation set")
     parser.add_argument("--transform", default="standardized", help="Transforming on the search space")
     parser.add_argument("--model_name", default="gp", help="Model to fit (default: SingleTaskGP)")
     parser.add_argument("--kernel", default=None, help="Model to fit (default: SingleTaskGP)")
-    #parser.add_argument("--loss", default="MSE", help="=Type of loss function") #add this later
+    # parser.add_argument("--loss", default="MSE", help="=Type of loss function") #add this later
     parser.add_argument("--gpu", type=int, default=0, help="Gpu id to run the job")
     parser.add_argument("--run_name", default=None, help="Name of the folder to move outputs.")
-    parser.add_argument("--plot_posterior", default=True, help="Do you want the posterior to be plotted at the end?")
+    parser.add_argument("--plot_posterior", type=int, default=True, help="Do you want the posterior to be plotted at the end?",)
+    parser.add_argument("--interval", type=int, default=1, help="The number of iterations between each validation",)
     args = parser.parse_args()
-    
-    #set global device
+
+    # set global device
     global device
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
-    
+
     main(args)
