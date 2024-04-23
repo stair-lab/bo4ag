@@ -136,9 +136,10 @@ def main(args):
             encoding="utf8",
         )
         
-        #save image here
+        #save image and model here
         if args.plot_posterior: 
             gp_mean_plot(gp, f"./output/{run_name}/gp_{seed}.png", device=device)
+            torch.save(gp.state_dict(), f"./output/{run_name}/gp_model_{seed}.pth")
        
     return
 
