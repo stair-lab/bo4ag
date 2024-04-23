@@ -37,55 +37,79 @@ class SAASPrior(Prior):
 
 def getKernel(kernel_name, device):
     covar_module = None
+    lengthscale_prior = gpytorch.priors.GammaPrior(3.0, 6.0)
+    outputscale_prior = gpytorch.priors.GammaPrior(2.0, 0.15)
+    
     if kernel_name == None:
         return covar_module
-    if kernel_name == "matern52":
-        #covar_module = ScaleKernel(MaternKernel(nu=5 / 2, ard_num_dims=2,))
+    if "matern" in kernel_name:
+        if kernel_name == "matern52": nu = 5 / 2
+        elif kernel_name == "matern32": nu = 3 / 2
+        elif kernel_name == "matern12": nu = 1 / 2
+            
+        # set the kernel
         covar_module = ScaleKernel(
             MaternKernel(
-            nu=2.5,
-            ard_num_dims=2,
-            lengthscale_prior=GammaPrior(3.0, 6.0),
+                nu=nu,
+                ard_num_dims=2,
+                lengthscale_prior=lengthscale_prior,
             ),
-        outputscale_prior=GammaPrior(2.0, 0.15),)
-    elif kernel_name == "matern32":
-        covar_module = ScaleKernel(MaternKernel(nu=3 / 2, ard_num_dims=2,))
-#     elif kernel_name == "matern12":
-#         covar_module = ScaleKernel(MaternKernel(nu=1 / 2, ard_num_dims=2,))
-#     elif kernel_name == "rbf":
-#         covar_module = ScaleKernel(RBFKernel(ard_num_dims=2),)
-#     elif kernel_name == "additive":
-#         rbf = ScaleKernel(RBFKernel(ard_num_dims=2))
-#         matern32 = ScaleKernel(MaternKernel(nu=3 / 2, ard_num_dims=2))
-#         covar_module = ScaleKernel(rbf + matern32)
-#     elif "spectral" in kernel_name:
-#         _, num_mixtures = kernel_name.split("-")
-#         num_mixtures = int(num_mixtures)
-#         covar_module = SpectralMixtureKernel(num_mixtures=num_mixtures, ard_num_dims=2)
+            outputscale_prior=outputscale_prior,
+        )
+    elif kernel_name == "rbf":
+        covar_module = ScaleKernel(
+            RBFKernel(
+                ard_num_dims=2,
+                lengthscale_prior=lengthscale_prior,
+            ),
+            outputscale_prior=outputscale_prior,
+        )
+    elif kernel_name == "additive":
+        rbf = ScaleKernel(
+            RBFKernel(
+                ard_num_dims=2,
+                lengthscale_prior=lengthscale_prior,
+            ),
+            outputscale_prior=outputscale_prior,
+        )
+        matern32 = ScaleKernel(
+            MaternKernel(
+                nu=3/2,
+                ard_num_dims=2,
+                lengthscale_prior=lengthscale_prior,
+            ),
+            outputscale_prior=outputscale_prior,
+        )
+        covar_module = ScaleKernel(rbf + matern32)
+       
+    elif "spectral" in kernel_name:
+        _, num_mixtures = kernel_name.split("-")
+        num_mixtures = int(num_mixtures)
+        covar_module = SpectralMixtureKernel(num_mixtures=num_mixtures, ard_num_dims=2)
 #     elif kernel_name == "saas":
 #         pass
     else:
         print("Not a valid kernel")  # should also throw error
-    
-#     #set the prior here
-#     lengthscale_prior = gpytorch.priors.GammaPrior(3.0, 6.0)
-#     outputscale_prior = gpytorch.priors.GammaPrior(2.0, 0.15)
-#     if kernel_name in ["matern52", "matern32", "matern12", "rbf"]: #set to default priors
-#         covar_module.base_kernel.lengthscale_prior = lengthscale_prior.to()
-#         covar_module.outputscale_prior = outputscale_prior.to()
-        
-#     elif kernel_name == "saas":
-#         # set the base kernel
-#         covar_module = ScaleKernel(MaternKernel(nu=5 / 2, ard_num_dims=2))
-#         # take a sample from saas prior
-#         saas_prior = SAASPrior(num_dims=2)
-#         length_scale = saas_prior.MCmean()  # use estimated mean as the length scale
-#         # manually set the length scale
-#         covar_module.base_kernel.lengthscale = length_scale
+
+    #     #set the prior here
+    #     lengthscale_prior = gpytorch.priors.GammaPrior(3.0, 6.0)
+    #     outputscale_prior = gpytorch.priors.GammaPrior(2.0, 0.15)
+    #     if kernel_name in ["matern52", "matern32", "matern12", "rbf"]: #set to default priors
+    #         covar_module.base_kernel.lengthscale_prior = lengthscale_prior.to()
+    #         covar_module.outputscale_prior = outputscale_prior.to()
+
+    #     elif kernel_name == "saas":
+    #         # set the base kernel
+    #         covar_module = ScaleKernel(MaternKernel(nu=5 / 2, ard_num_dims=2))
+    #         # take a sample from saas prior
+    #         saas_prior = SAASPrior(num_dims=2)
+    #         length_scale = saas_prior.MCmean()  # use estimated mean as the length scale
+    #         # manually set the length scale
+    #         covar_module.base_kernel.lengthscale = length_scale
     return covar_module
 
 
-def gp_mean_plot(model, file_name, device, title="Your Function", n=900):
+def gp_mean_plot(model, file_name, device, title="Your Function", n=500):
     """
     Plots your (true or estimated) coheritability function.
     model: function that takes in two wavelength and outputs coh2 (estimate)
@@ -119,4 +143,6 @@ def gp_mean_plot(model, file_name, device, title="Your Function", n=900):
 
     # save the image here
     plt.savefig(file_name)
+    
+    plt.close()
     return
