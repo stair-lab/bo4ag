@@ -13,7 +13,7 @@ from botorch.models.transforms.outcome import Standardize
 from botorch.models.transforms import Normalize
 
 from data_util import stadardize, getLookup
-from util import getKernel
+from util import getKernel, gp_mean_plot
 
 #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -63,10 +63,10 @@ def calcR2(model, train_X, lookup, **kwargs):
 def main(args):
     seeds = 5
     n = args.n
-    trait = args.env  # options are narea, sla, pn, ps
+    trait = args.env  # options: narea, sla, pn, ps
     transform = args.transform
     model = args.model_name
-    kernel = getKernel(args.kernel)
+    kernel = getKernel(args.kernel, device=device)
     
     # create function to querying the environment
     table = getLookup(trait, transform)
@@ -99,38 +99,25 @@ def main(args):
         for i in tqdm(range(n)):
             #select training points
             train_X, train_Y = full_train_X[:i+10], full_train_Y[:i+10]
+            gp = SingleTaskGP(
+                train_X,
+                train_Y,
+                covar_module=kernel,
+                outcome_transform=Standardize(1), 
+                input_transform=Normalize(train_X.shape[-1]),
+            )
 
-            #fit the gp
-            if model == "saas":
-                saas_gp = SaasFullyBayesianSingleTaskGP(
-                    train_X,
-                    train_Y,
-                    outcome_transform=Standardize(1),
-                    input_transform=Normalize(train_X.shape[-1])
-                )
-                gp = SingleTaskGP(
-                    train_X,
-                    train_Y,
-                    outcome_transform=Standardize(1), 
-                    input_transform=Normalize(train_X.shape[-1]),
-                )
-                #print(saas_gp.get_param_state(), gp.get_param_state(), gp.covar_module)
-                #exit()
-                
-                fit_fully_bayesian_model_nuts(gp,
-                                             max_tree_depth=5,
-                                              num_samples=128,
-                                              warmup_steps=50,)
-            else:
-                gp = SingleTaskGP(
-                    train_X,
-                    train_Y,
-                    covar_module=kernel,
-                    outcome_transform=Standardize(1), 
-                    input_transform=Normalize(train_X.shape[-1]),
-                )
-                mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
-                fit_gpytorch_mll(mll)
+            #this code is probably not necessary unless my inputs are in batches
+#             gp._subset_batch_dict = {
+#                 "mean_module.raw_constant": -1,
+#                 "covar_module.raw_outputscale": -1,
+#                 "covar_module.base_kernel.raw_lengthscale": -3,
+#                 "likelihood.noise_covar.raw_noise": -2
+#             }
+            
+            
+            mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
+            fit_gpytorch_mll(mll)
 
             # calculate validation loss and record results
             kwargs = vars(args)
@@ -148,6 +135,11 @@ def main(args):
             f"./output/{run_name}/gp_{seed}.npy",
             encoding="utf8",
         )
+        
+        #save image here
+        if args.plot_posterior: 
+            gp_mean_plot(gp, f"./output/{run_name}/gp_{seed}.png", device=device)
+       
     return
 
 if __name__ == "__main__":
@@ -161,6 +153,7 @@ if __name__ == "__main__":
     #parser.add_argument("--loss", default="MSE", help="=Type of loss function") #add this later
     parser.add_argument("--gpu", type=int, default=0, help="Gpu id to run the job")
     parser.add_argument("--run_name", default=None, help="Name of the folder to move outputs.")
+    parser.add_argument("--plot_posterior", default=True, help="Do you want the posterior to be plotted at the end?")
     args = parser.parse_args()
     
     #set global device
