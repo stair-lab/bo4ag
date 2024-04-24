@@ -8,10 +8,9 @@ def stadardize(data):
     standardized_data = (data - mean) / std
     return standardized_data
 
-def getLookup(trait, transform="standardized"):
+def getLookup(trait, transform=None):
     path = f"./data/{trait}_coh2.csv"
     lookup = pd.read_csv(path, header=0)
-
     # Replace nans with zero
     lookup_tensor = torch.tensor(lookup.values, dtype=torch.float64)
     no_nan_lookup = torch.nan_to_num(lookup_tensor)
@@ -34,4 +33,4 @@ def getLookup(trait, transform="standardized"):
         return stadardize(no_nan_lookup) #standardize
     elif transform is not None:
         print(f"{transform} is not a valid input tranform...")
-    return no_nan_lookup #standardize
+    return no_nan_lookup
