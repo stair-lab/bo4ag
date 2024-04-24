@@ -1,7 +1,7 @@
 import torch
 import gpytorch
 from gpytorch.priors import HalfCauchyPrior, GammaPrior, Prior
-from gpytorch.kernels import MaternKernel, ScaleKernel, RBFKernel, SpectralMixtureKernel
+from gpytorch.kernels import MaternKernel, ScaleKernel, RBFKernel, PeriodicKernel
 from torch.nn import Module as TModule
 import matplotlib.pyplot as plt
 
@@ -65,51 +65,67 @@ def getKernel(kernel_name, device):
             outputscale_prior=outputscale_prior,
         )
     elif kernel_name == "additive":
+#        periodic = ScaleKernel(
+#             PeriodicKernel(
+#                 ard_num_dims=2,
+#                 lengthscale_prior=lengthscale_prior),
+#             outputscale_prior=outputscale_prior,
+#         ) 
         rbf = ScaleKernel(
             RBFKernel(
                 ard_num_dims=2,
-                lengthscale_prior=lengthscale_prior,
+                lengthscale_prior=GammaPrior(3.0, 6.0),
             ),
-            outputscale_prior=outputscale_prior,
+            outputscale_prior=GammaPrior(2.0, 0.15),
         )
         matern32 = ScaleKernel(
             MaternKernel(
-                nu=3/2,
+                nu=1/2,
                 ard_num_dims=2,
-                lengthscale_prior=lengthscale_prior,
+                lengthscale_prior=GammaPrior(3.0, 6.0),
             ),
-            outputscale_prior=outputscale_prior,
+            outputscale_prior=GammaPrior(2.0, 0.15),
         )
-        covar_module = ScaleKernel(rbf + matern32)
-       
-    elif "spectral" in kernel_name:
-        _, num_mixtures = kernel_name.split("-")
-        num_mixtures = int(num_mixtures)
-        covar_module = SpectralMixtureKernel(num_mixtures=num_mixtures, ard_num_dims=2)
-#     elif kernel_name == "saas":
-#         pass
+        covar_module = ScaleKernel(rbf + matern32)       
+    elif kernel_name == "periodic":
+        covar_module = ScaleKernel(
+            PeriodicKernel(
+                ard_num_dims=2,
+                lengthscale_prior=lengthscale_prior),
+            outputscale_prior=outputscale_prior
+        ) 
+    elif kernel_name == "saas":
+        #todo: this implementation is not correct
+        # set the base kernel
+        covar_module = ScaleKernel(
+            MaternKernel(nu=5 / 2, 
+                         ard_num_dims=2,
+                         #lengthscale_prior=GammaPrior(3.0, 6.0),
+                        ),
+            outputscale_prior=outputscale_prior
+        )
+        # take a sample from saas prior
+        saas_prior = SAASPrior(num_dims=2)
+        length_scale = saas_prior.MCmean()  # use estimated mean as the length scale
+        # manually set the length scale
+        #covar_module.base_kernel.lengthscale = length_scale
+        covar_module.base_kernel._set_lengthscale(length_scale) #this doesn't do anything...
+            
+            
     else:
         print("Not a valid kernel")  # should also throw error
 
-    #     #set the prior here
-    #     lengthscale_prior = gpytorch.priors.GammaPrior(3.0, 6.0)
-    #     outputscale_prior = gpytorch.priors.GammaPrior(2.0, 0.15)
-    #     if kernel_name in ["matern52", "matern32", "matern12", "rbf"]: #set to default priors
-    #         covar_module.base_kernel.lengthscale_prior = lengthscale_prior.to()
-    #         covar_module.outputscale_prior = outputscale_prior.to()
+#     if kernel_name in ["matern52", "matern32", "matern12", "rbf"]: #set to default priors
+#         covar_module.base_kernel.register_prior(
+#             "lengthscale_prior", 
+#             lengthscale_prior)
+        #covar_module.base_kernel.lengthscale_prior = lengthscale_prior
+        #covar_module.outputscale_prior = outputscale_prior
 
-    #     elif kernel_name == "saas":
-    #         # set the base kernel
-    #         covar_module = ScaleKernel(MaternKernel(nu=5 / 2, ard_num_dims=2))
-    #         # take a sample from saas prior
-    #         saas_prior = SAASPrior(num_dims=2)
-    #         length_scale = saas_prior.MCmean()  # use estimated mean as the length scale
-    #         # manually set the length scale
-    #         covar_module.base_kernel.lengthscale = length_scale
     return covar_module
 
 
-def gp_mean_plot(model, file_name, device, title="Your Function", n=500):
+def gp_mean_plot(model, file_name, device, title="Your Function", n=300):
     """
     Plots your (true or estimated) coheritability function.
     model: function that takes in two wavelength and outputs coh2 (estimate)
