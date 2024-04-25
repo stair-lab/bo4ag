@@ -4,7 +4,7 @@ import time
 import argparse
 from tqdm import tqdm
 
-from dnn import NNSurrogate
+from models.dnn import NNSurrogate
 from botorch.models import SingleTaskGP
 from botorch.fit import fit_gpytorch_mll
 from gpytorch.mlls import ExactMarginalLogLikelihood
@@ -20,21 +20,12 @@ from botorch.acquisition import (
     qProbabilityOfImprovement,
     qKnowledgeGradient,
 )
+
+from data_util import getLookup
 # from botorch.acquisition.max_value_entropy_search import qMaxValueEntropy
 
 # set device here
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
-def getLookup(trait):
-    path = f"./data/{trait}_coh2.csv"
-    lookup = pd.read_csv(path, header=0)
-
-    # fix formatting
-    lookup_tensor = torch.tensor(lookup.values, dtype=torch.float64)
-    no_nan_lookup = torch.nan_to_num(lookup_tensor)
-    no_nan_lookup[no_nan_lookup > 1] = 0
-    return no_nan_lookup   
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu") 
 
 def getKernel(kernel_name):
     covar_module = None
@@ -54,26 +45,6 @@ def getKernel(kernel_name):
         print("Not a valid kernel")  # should also throw error
     return covar_module
 
-    
-def main():
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument("--env", help="Environment to run search.")
-    parser.add_argument(
-        "--kernel", default="rbf", help="Kernel function for the gaussian process"
-    )
-    parser.add_argument("--acq", default="EI", help="Acquisition function")
-    parser.add_argument("--model", default="gp", help="Surrogate Model (GP by default)")
-    parser.add_argument("--n", type=int, default=300, help="Number of iterations")
-    parser.add_argument("--gpu", type=int, default=0, help="Gpu id to run the job")
-    args = parser.parse_args()
-    
-    #set device globally
-    global device
-    device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
-    print(f"Device Used: {device}")
-    runBO(args)
-    return
 
 def getCoordTensor(size=2150):
     x, y = torch.arange(size), torch.arange(size)
@@ -100,18 +71,20 @@ def calcLoss(model, train_X, lookup, **kwargs):
     return train_loss, val_loss
 
 def runBO(args):
-    num_restarts = 128
-    raw_samples = 128
     n = args.n  # replace this
     trait = args.env
+    transform = args.transform
     seeds = 5  # consider replacing this
+    
     acq_name = args.acq
     kernel_name = args.kernel
     kernel = getKernel(kernel_name)
     model_name = args.model
+    num_restarts = 128
+    raw_samples = 128
   
     # create function for querying the environment
-    table = getLookup(args.env)
+    table = getLookup(trait, )
     def lookup(X):
         X_indices = X.long().cpu() 
         Y = table[X_indices[:, 0], X_indices[:, 1]].reshape(-1, 1)
@@ -182,14 +155,6 @@ def runBO(args):
                 elif acq_name == "KG":  # working
                     num_restarts = 10
                     acq = qKnowledgeGradient(gp)
-                elif acq_name == "MES":
-                    continue
-                # TODO
-                #                 x1_values = np.linspace(0, 2150, 2150)
-                #                 x2_values = np.linspace(0, 2150, 2150)
-                #                 x1, x2 = np.meshgrid(x1_values, x2_values)
-                #                 candidates = np.vstack([x1.ravel(), x2.ravel()]).T
-                #                 candidates = torch.from_numpy(candidates).to(device=device)
                 else:
                     print(f"{acq_name} is not a valid acquisition function")
                 new_X, acq_value = optimize_acqf(
@@ -217,39 +182,61 @@ def runBO(args):
             toc = time.perf_counter()  # end time
             _result.append([new_Y[0][0].item(), toc - tic, new_X[0]])
 
-        # save all your queries
-        torch.save(train_X, f"./output/{trait}/botorch{run_name}_X_{seed}.npy")
-        torch.save(train_Y, f"./output/{trait}/botorch{run_name}_Y_{seed}.npy")
+#         # save all your queries
+#         torch.save(train_X, f"./output/{trait}/botorch{run_name}_X_{seed}.npy")
+#         torch.save(train_Y, f"./output/{trait}/botorch{run_name}_Y_{seed}.npy")
         
-        #save learning curve
-        curve_df = pd.DataFrame(_curve)
-        curve_df.to_csv(f"./output/{trait}/botorch{run_name}_curve_{seed}.npy",
-            encoding="utf8",)
+#         #save learning curve
+#         curve_df = pd.DataFrame(_curve)
+#         curve_df.to_csv(f"./output/{trait}/botorch{run_name}_curve_{seed}.npy",
+#             encoding="utf8",)
         
-        # organize the list to have running best
-        best = [0, 0, 0]  # format is [time, best co-heritabilty]
-        botorch_result = []
-        for i in _result:
-            if i[0] > best[0]:
-                best = i
-            botorch_result.append(
-                [best[0], i[1], best[2]]
-            )  # append [best so far, current time]
-        print("Best From Run: ", best)
+#         # organize the list to have running best
+#         best = [0, 0, 0]  # format is [time, best co-heritabilty]
+#         botorch_result = []
+#         for i in _result:
+#             if i[0] > best[0]:
+#                 best = i
+#             botorch_result.append(
+#                 [best[0], i[1], best[2]]
+#             )  # append [best so far, current time]
+#         print("Best From Run: ", best)
 
-        # store results
-        botorch_result = pd.DataFrame(
-            botorch_result, columns=["Best", "Time", "Candidate"]
-        )
-        botorch_result.to_csv(
-            f"./output/{trait}/botorch{run_name}_result_{seed}.npy",
-            encoding="utf8",
-        )  # store botorch search results
+#         # store results
+#         botorch_result = pd.DataFrame(
+#             botorch_result, columns=["Best", "Time", "Candidate"]
+#         )
+#         botorch_result.to_csv(
+#             f"./output/{trait}/botorch{run_name}_result_{seed}.npy",
+#             encoding="utf8",
+#         )  # store botorch search results
 
         # print full time
         toc = time.perf_counter()  # end time
         print("BoTorch Took ", (toc - tic), "seconds")
         
     return
+
+def main():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--env", help="Environment to run search.")
+    parser.add_argument("--n", type=int, default=3000, help="Largest number of random points fit during training")
+    parser.add_argument("--transform", default=None, help="Transforming on the search space")
+    parser.add_argument(
+        "--kernel", default="rbf", help="Kernel function for the gaussian process"
+    )
+    parser.add_argument("--acq", default="EI", help="Acquisition function")
+    parser.add_argument("--model", default="gp", help="Surrogate Model (GP by default)")
+    parser.add_argument("--gpu", type=int, default=0, help="Gpu id to run the job")
+    args = parser.parse_args()
+    
+    #set device globally
+    global device
+    device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
+    print(f"Device Used: {device}")
+    runBO(args)
+    return
+
 
 main()
