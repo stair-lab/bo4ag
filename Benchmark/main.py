@@ -3,6 +3,7 @@ import pandas as pd
 import time
 import argparse
 from tqdm import tqdm
+import os
 
 from models.dnn import NNSurrogate
 from botorch.models import SingleTaskGP
@@ -71,14 +72,13 @@ def calcLoss(model, train_X, lookup, **kwargs):
     return train_loss, val_loss
 
 def runBO(args):
-    n = args.n  # replace this
+    n = args.n  
     trait = args.env
     transform = args.transform
-    seeds = 5  # consider replacing this
+    seeds = 5 
     
     acq_name = args.acq
-    kernel_name = args.kernel
-    kernel = getKernel(kernel_name)
+    kernel = getKernel(args.kernel)
     model_name = args.model
     num_restarts = 128
     raw_samples = 128
@@ -94,23 +94,27 @@ def runBO(args):
         [torch.zeros(2).double(), torch.ones(2).double() * 2150]
     ).to(device, torch.float64)
     
-    # check the lookup table
-    assert not torch.isnan(torch.sum(table))
-    assert not torch.isinf(torch.sum(table))
+    # create a directory to save results
+    run_name = args.run_name
+    if run_name == None:
+        run_name = time.strftime("%Y%m%d-%H%M%S")
+    if not os.path.isdir(f"./output/BO_runs/{trait}/{run_name}"):
+        os.mkdir(f"./output/BO_runs/{trait}/{run_name}")
 
-    print(f"Running {trait}, {args.acq}-{kernel_name}...")
-    for seed in range(0, seeds):  # seed one is already run and stuff
-        tic = time.perf_counter()  # start time
+    # save args in a file
+    with open(f"./output/BO_runs/{trait}/{run_name}/args.txt", "w") as file:
+        for key, value in vars(args).items():
+            file.write(f"{key}: {value}\n")
 
-        # collect random points as training points
-        torch.manual_seed(seed)  # setting seed
+    print(f"Running {trait}, {args.acq}-{args.kernel}...")
+    for seed in range(0, seeds):  
+        # collect random points as initial training points
+        torch.manual_seed(seed) 
         train_X = torch.rand(10, 2, dtype=torch.float64, device=device) * 2150
         train_Y = lookup(train_X)
 
         # main bayes_opt training loop
-        _result = []
-        _curve = {"n": [], "train_loss": [] , "val_loss": []}
-        run_name = f"{acq_name}_{kernel_name}"
+        _result = {"n": [], "train_loss": [] , "val_loss": [], "best": []}
         for i in tqdm(range(n)):
             # set amd train the surrogate model
             if model_name == "gp":
@@ -136,23 +140,20 @@ def runBO(args):
             
             #query from acquition function
             if acq_name == "random":
-                run_name = f"{acq_name}_{model_name}"
-                if model_name == "gp":
-                    run_name = f"{acq_name}_{kernel_name}"
-                    
-                new_X = torch.rand((1, 2), dtype=torch.float64, device=device,)
+                new_X = torch.rand((i+1, 2), dtype=torch.float64, device=device,)[-1, :]#this is not working sequentially
                 new_X = new_X * 2150  # adjust to match bounds
+                new_X = new_X.reshape(1,2)
             else: 
                 #all acquition functions which use `optimize_acqf` as the optimizer
                 if "UCB" in acq_name:
                     _, beta = acq_name.split("-")
                     beta = float(beta)
                     acq = qUpperConfidenceBound(gp, beta=beta)
-                elif acq_name == "EI":  # working
+                elif acq_name == "EI":  
                     acq = qExpectedImprovement(gp, best_f=max(train_Y))
-                elif acq_name == "PI":  # working
+                elif acq_name == "PI":  
                     acq = qProbabilityOfImprovement(gp, best_f=max(train_Y))
-                elif acq_name == "KG":  # working
+                elif acq_name == "KG":  
                     num_restarts = 10
                     acq = qKnowledgeGradient(gp)
                 else:
@@ -169,72 +170,44 @@ def runBO(args):
             #calculate validation loss here 
             kwargs = {"seed": seed,}
             train_loss, val_loss = calcLoss(model, train_X, lookup, **kwargs)
-            _curve["train_loss"].append(train_loss.item())
-            _curve["val_loss"].append(val_loss.item())
-            _curve["n"].append(i)
-            print(f"train loss: {train_loss}, validation loss: {val_loss}")
-            
+            _result["train_loss"].append(train_loss.item())
+            _result["val_loss"].append(val_loss.item())
+            _result["n"].append(i)
+            _result["best"].append(max(train_Y).item())
+            print(f"train loss: {train_loss}, validation loss: {val_loss}, Best: {max(train_Y)}")
+
             # add new candidate
             train_X = torch.cat([train_X, new_X])
             train_Y = torch.cat([train_Y, new_Y])
+            
+         #save results
+        _result = pd.DataFrame(_result)
+        _result.to_csv(f"./output/BO_runs/{trait}/{run_name}/result_{seed}.npy", encoding="utf8",)
 
-            # end timer and add
-            toc = time.perf_counter()  # end time
-            _result.append([new_Y[0][0].item(), toc - tic, new_X[0]])
+         #TODO: save the model
+         
 
-#         # save all your queries
-#         torch.save(train_X, f"./output/{trait}/botorch{run_name}_X_{seed}.npy")
-#         torch.save(train_Y, f"./output/{trait}/botorch{run_name}_Y_{seed}.npy")
-        
-#         #save learning curve
-#         curve_df = pd.DataFrame(_curve)
-#         curve_df.to_csv(f"./output/{trait}/botorch{run_name}_curve_{seed}.npy",
-#             encoding="utf8",)
-        
-#         # organize the list to have running best
-#         best = [0, 0, 0]  # format is [time, best co-heritabilty]
-#         botorch_result = []
-#         for i in _result:
-#             if i[0] > best[0]:
-#                 best = i
-#             botorch_result.append(
-#                 [best[0], i[1], best[2]]
-#             )  # append [best so far, current time]
-#         print("Best From Run: ", best)
-
-#         # store results
-#         botorch_result = pd.DataFrame(
-#             botorch_result, columns=["Best", "Time", "Candidate"]
-#         )
-#         botorch_result.to_csv(
-#             f"./output/{trait}/botorch{run_name}_result_{seed}.npy",
-#             encoding="utf8",
-#         )  # store botorch search results
-
-        # print full time
-        toc = time.perf_counter()  # end time
-        print("BoTorch Took ", (toc - tic), "seconds")
         
     return
 
 def main():
     parser = argparse.ArgumentParser()
-
     parser.add_argument("--env", help="Environment to run search.")
     parser.add_argument("--n", type=int, default=3000, help="Largest number of random points fit during training")
     parser.add_argument("--transform", default=None, help="Transforming on the search space")
-    parser.add_argument(
-        "--kernel", default="rbf", help="Kernel function for the gaussian process"
-    )
+    parser.add_argument("--kernel", default="rbf", help="Kernel function for the gaussian process")
     parser.add_argument("--acq", default="EI", help="Acquisition function")
     parser.add_argument("--model", default="gp", help="Surrogate Model (GP by default)")
     parser.add_argument("--gpu", type=int, default=0, help="Gpu id to run the job")
+    parser.add_argument("--run_name", default=None, help="Name of the folder to move outputs.")
     args = parser.parse_args()
     
     #set device globally
     global device
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     print(f"Device Used: {device}")
+    
+    #start your run
     runBO(args)
     return
 
