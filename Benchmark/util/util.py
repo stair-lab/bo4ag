@@ -65,12 +65,6 @@ def getKernel(kernel_name, device):
             outputscale_prior=outputscale_prior,
         )
     elif kernel_name == "additive":
-#        periodic = ScaleKernel(
-#             PeriodicKernel(
-#                 ard_num_dims=2,
-#                 lengthscale_prior=lengthscale_prior),
-#             outputscale_prior=outputscale_prior,
-#         ) 
         rbf = ScaleKernel(
             RBFKernel(
                 ard_num_dims=2,

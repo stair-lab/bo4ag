@@ -20,7 +20,7 @@ from botorch.acquisition import (
     qKnowledgeGradient,
 )
 
-from data_util import getLookup
+from util.data_util import getLookup
 
 
 def getKernel(kernel_name):
@@ -152,7 +152,7 @@ def main():
     parser.add_argument("--acq", default="EI", help="Acquisition function")
     parser.add_argument("--n", type=int, default=300, help="Number of iterations")
     parser.add_argument("--gpu", type=int, default=0, help="Gpu id to run the job")
-    parser.add_argument("--run_name", default=None, help="Name of the folder to move outputs.")
+    parser.add_argument("--run_name", default="rbf", help="Name of the folder to move outputs.")
     parser.add_argument("--transform", default=None, help="Transforming on the search space")
     args = parser.parse_args()
     
