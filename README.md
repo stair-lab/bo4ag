@@ -6,8 +6,8 @@
 
 
 ### Downloading the data:
-1. The coheritability data can be found in the [google drive](https://drive.google.com/drive/folders/1bdezexIEo9CdIViKiN_m_XlCUe3rJk7w).
-2. Move files the data files from `./data/*.csv` on the Google Drive to `./Benchmark/data` in the project folder.
+1. The coheritability data can be found on [huggingface](https://huggingface.co/datasets/stair-lab/coh2)
+3. Download the files to `./Benchmark/data`.
 
 ## Running Bayesian Optimization (BO) Benchmarks
 1. `cd Benchmarks`
