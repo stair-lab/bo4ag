@@ -6,7 +6,7 @@
 
 
 ### Downloading the data:
-1. The coheritability data can be found on [huggingface](https://huggingface.co/datasets/stair-lab/coh2)
+1. The coheritability data can be found on [huggingface](https://huggingface.co/datasets/stair-lab/coh2 or [google drive](https://drive.google.com/drive/folders/1bdezexIEo9CdIViKiN_m_XlCUe3rJk7w).
 3. Download the files to `./Benchmark/data`.
 
 ## Running Bayesian Optimization (BO) Benchmarks
