@@ -35,7 +35,11 @@ class SAASPrior(Prior):
         return total / num_samples
 
 
-def getKernel(kernel_name, device):
+def getKernel(kernel_name, device, prior):
+    if prior != "gamma":
+        print("Using default prior!")
+        return getDefaultKernel(kernel_name)
+    
     covar_module = None
     lengthscale_prior = gpytorch.priors.GammaPrior(3.0, 6.0)
     outputscale_prior = gpytorch.priors.GammaPrior(2.0, 0.15)
@@ -118,6 +122,24 @@ def getKernel(kernel_name, device):
 
     return covar_module
 
+
+def getDefaultKernel(kernel_name):
+    covar_module = None
+    if kernel_name == "matern52":
+        covar_module = ScaleKernel(MaternKernel(nu=5 / 2, ard_num_dims=2))
+    elif kernel_name == "matern32":
+        covar_module = ScaleKernel(MaternKernel(nu=3 / 2, ard_num_dims=2))
+    elif kernel_name == "matern12":
+        covar_module = ScaleKernel(MaternKernel(nu=1 / 2, ard_num_dims=2))
+    elif kernel_name == "rbf":
+        covar_module = ScaleKernel(RBFKernel())
+    elif "spectral" in kernel_name:
+        _, num_mixtures = kernel_name.split("-")
+        num_mixtures = int(num_mixtures)
+        covar_module = SpectralMixtureKernel(num_mixtures=num_mixtures, ard_num_dims=2)
+    else:
+        print("Not a valid kernel")  # should also throw error
+    return covar_module
 
 def gp_mean_plot(model, file_name, device, title="Your Function", n=300):
     """

@@ -21,25 +21,7 @@ from botorch.acquisition import (
 )
 
 from util.data_util import getLookup
-
-
-def getKernel(kernel_name):
-    covar_module = None
-    if kernel_name == "matern52":
-        covar_module = ScaleKernel(MaternKernel(nu=5 / 2, ard_num_dims=2))
-    elif kernel_name == "matern32":
-        covar_module = ScaleKernel(MaternKernel(nu=3 / 2, ard_num_dims=2))
-    elif kernel_name == "matern12":
-        covar_module = ScaleKernel(MaternKernel(nu=1 / 2, ard_num_dims=2))
-    elif kernel_name == "rbf":
-        covar_module = ScaleKernel(RBFKernel())
-    elif "spectral" in kernel_name:
-        _, num_mixtures = kernel_name.split("-")
-        num_mixtures = int(num_mixtures)
-        covar_module = SpectralMixtureKernel(num_mixtures=num_mixtures, ard_num_dims=2)
-    else:
-        print("Not a valid kernel")  # should also throw error
-    return covar_module
+from util.util import getKernel
 
 
 def runBO(args):    
@@ -49,7 +31,7 @@ def runBO(args):
     
     acq_name = args.acq
     kernel_name = args.kernel
-    kernel = getKernel(args.kernel)
+    kernel = getKernel(args.kernel, device, args.prior)
     transform = args.transform 
     num_restarts = 128
     raw_samples = 128
@@ -153,6 +135,7 @@ def main():
     parser.add_argument("--n", type=int, default=300, help="Number of iterations")
     parser.add_argument("--gpu", type=int, default=0, help="Gpu id to run the job")
     parser.add_argument("--run_name", default="rbf", help="Name of the folder to move outputs.")
+    parser.add_argument("--prior", default=None, help="Lengthscale prior")
     parser.add_argument("--transform", default=None, help="Transforming on the search space")
     args = parser.parse_args()
     
